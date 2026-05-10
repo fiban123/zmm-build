@@ -1,22 +1,21 @@
 CC      := clang
 AR      := ar
 ARFLAGS := rcs
-CFLAGS  := -std=c23 -Wall -Wextra -fPIC -Iinclude -Iextern -ggdb3 -fsanitize=address -fsanitize=undefined
-LDFLAGS := -Lbuild -lzmm -lcpu_features -Wl,-rpath,'$$ORIGIN' -ggdb3 -fsanitize=address -fsanitize=undefined
+CFLAGS  := -std=c23 -Wall -Wextra -fPIC -Iinclude -Iextern
+LDFLAGS := -lzmm -lcpu_features
 
 # --- Performance Mode Logic ---
-ifeq ($(filter fast lto-fast,$(MAKECMDGOALS)),)
+ifeq ($(filter fast, $(MAKECMDGOALS)),)
     # Default (Debug/Sanitized)
 else
-    CFLAGS  := -std=c23 -Wall -Wextra -fPIC -Iinclude -Iextern -O3
-    LDFLAGS := -Lbuild -lzmm -lcpu_features -Wl,-rpath,'$$ORIGIN' -O3
+    CFLAGS += -O3
 endif
 
-ifeq ($(filter lto-fast,$(MAKECMDGOALS)),lto-fast)
-    CFLAGS  += -flto
-    LDFLAGS += -flto
-    AR      := llvm-ar
-endif
+# --- Install Prefix ---
+PREFIX  ?= /usr/local
+BIN_DIR := $(PREFIX)/bin
+LIB_DIR := $(PREFIX)/lib
+INC_DIR := $(PREFIX)/include/zmm
 
 # --- Directories ---
 SRC_DIR := src
@@ -24,6 +23,15 @@ CLI_DIR := cli
 BLD_DIR := build
 OBJ_DIR := $(BLD_DIR)/.obj
 DEP_DIR := $(BLD_DIR)/.deps
+
+# --- OS Specifics ---
+ifeq ($(OS),Windows_NT)
+    SHLIB_EXT   := .dll
+    EXE_EXT     := .exe
+else
+    SHLIB_EXT   := .so
+    EXE_EXT     := 
+endif
 
 # --- Files ---
 # Library sources
@@ -36,14 +44,14 @@ CLI_SRCS := $(wildcard $(CLI_DIR)/*.c)
 CLI_OBJS := $(CLI_SRCS:$(CLI_DIR)/%.c=$(OBJ_DIR)/cli_%.o)
 CLI_DEPS := $(CLI_SRCS:$(CLI_DIR)/%.c=$(DEP_DIR)/cli_%.d)
 
-LIB        := $(BLD_DIR)/libzmm.so
+LIB        := $(BLD_DIR)/libzmm$(SHLIB_EXT)
 STATIC_LIB := $(BLD_DIR)/libzmm.a
 TEST       := $(BLD_DIR)/test.out
-CLI_EXE    := $(BLD_DIR)/cli  
+CLI_EXE    := $(BLD_DIR)/cli$(EXE_EXT)  
 
 DEPFLAGS = -MMD -MP -MF $(DEP_DIR)/$(notdir $*).d
 
-.PHONY: all lib slib test cli clean fast lto-fast
+.PHONY: all lib slib test cli clean fast lto-fast install uninstall
 
 all: lib slib test cli
 
@@ -68,7 +76,7 @@ $(STATIC_LIB): $(OBJS)
 cli: $(CLI_EXE)
 
 $(CLI_EXE): $(CLI_OBJS) $(LIB)
-	$(CC) $(CLI_OBJS) -o $@ $(LDFLAGS)
+	$(CC) $(CLI_OBJS) -o $@ -L$(BLD_DIR) $(LDFLAGS)
 
 # Library Object Rule
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
@@ -84,10 +92,46 @@ test: $(TEST)
 
 $(TEST): test/main.c $(LIB)
 	@mkdir -p $(BLD_DIR)
-	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) $< -o $@ -L$(BLD_DIR) $(LDFLAGS)
 
 clean:
-	rm -rf $(BLD_DIR)
+	rm -rf $(OBJ_DIR)
+	rm -f $(LIB)
+	rm -f $(STATIC_LIB)
+	rm -f $(CLI_EXE)
+
+# --- Installation Targets ---
+install: fast
+	@echo "Installing zmm to $(PREFIX)..."
+	@install -d $(BIN_DIR) $(LIB_DIR) $(INC_DIR)
+	
+	@echo " -> Installing CLI as zmm$(EXE_EXT)"
+	@install -m 755 $(CLI_EXE) $(BIN_DIR)/zmm$(EXE_EXT)
+
+ifeq ($(OS),Windows_NT)
+	@echo " -> Installing Shared Library to $(BIN_DIR) (Windows PATH requirement)"
+	@install -m 755 $(LIB) $(BIN_DIR)/
+else
+	@echo " -> Installing Shared Library to $(LIB_DIR)"
+	@install -m 644 $(LIB) $(LIB_DIR)/
+endif
+
+	@echo " -> Installing Static Library to $(LIB_DIR)"
+	@install -m 644 $(STATIC_LIB) $(LIB_DIR)/
+	
+	@echo " -> Installing Headers to $(INC_DIR)"
+	@install -m 644 include/*.h $(INC_DIR)/
+	
+	@echo "Installation complete!"
+
+uninstall:
+	@echo "Uninstalling zmm..."
+	rm -f $(BIN_DIR)/zmm$(EXE_EXT)
+	rm -f $(BIN_DIR)/libzmm$(SHLIB_EXT)
+	rm -f $(LIB_DIR)/libzmm$(SHLIB_EXT)
+	rm -f $(LIB_DIR)/libzmm.a
+	rm -rf $(INC_DIR)
+	@echo "Uninstallation complete!"
 
 -include $(DEPS)
 -include $(CLI_DEPS)

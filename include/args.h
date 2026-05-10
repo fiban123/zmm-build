@@ -1,3 +1,5 @@
+#pragma once
+
 #include "cc.h"
 #include "export.h"
 #include "num.h"
@@ -49,6 +51,12 @@ API void zmm_cmd_pfinish(ArgvBuilder* cmd);
  * Frees the command builder's buffers.
  */
 API void zmm_cmd_free(ArgvBuilder* cmd);
+
+/**
+ * Prints the command to stdout thread-safely.
+ * each arg is separated by a space
+ */
+API void zmm_cmd_print(const char* args, usize num_args);
 
 typedef struct {
     SliceCU8* ptr;

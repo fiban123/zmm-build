@@ -1,3 +1,5 @@
+#pragma once
+
 #include "export.h"
 #include "num.h"
 

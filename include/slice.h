@@ -21,8 +21,8 @@
 typedef Slice(u8) SliceU8;
 typedef Slice(const u8) SliceCU8;
 
-#define NullSliceU8 (SliceU8){.ptr = nullptr, .len = 0}
-#define NullSliceCU8 (SliceCU8){.ptr = nullptr, .len = 0}
+#define NullSliceU8 (SliceU8){.ptr = NULL, .len = 0}
+#define NullSliceCU8 (SliceCU8){.ptr = NULL, .len = 0}
 
 /**
  * Creates a SliceCU8 from a string literal.

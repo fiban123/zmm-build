@@ -1,5 +1,8 @@
 #include "args.h"
 
+#include "print.h"
+#include "slice.h"
+
 // Initializes the builder using your stack buffers
 void zmm_cmd_initbuf(ArgvBuilder* cmd, void* cbuf, usize cbuf_size, void* abuf,
                      usize abuf_size) {
@@ -110,6 +113,17 @@ void zmm_cmd_free(ArgvBuilder* cmd) {
     cmd->argptr_cap = 0;
     cmd->args_len = 0;
     cmd->num_args = 0;
+}
+
+void zmm_cmd_print(const char* args, usize num_args) {
+    const char* p = args;
+    for (usize i = 0; i < num_args - 1; i++) {
+        usize len = strlen(p);
+        zmm_lprintf("%s ", (SliceCU8){.ptr = (const u8*)p, .len = len});
+        p += len + 1;
+    }
+    zmm_lprintf("%sz\n", p);
+    zmm_lemit();
 }
 
 i32 zmm_arg_init(Argv* self, int argc, char** argv) {

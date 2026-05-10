@@ -1,5 +1,5 @@
-build/
 out/
 
 .clangd
-
+*.out
+*.so

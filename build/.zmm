@@ -1,0 +1,7 @@
+{
+    "build-script-srcs": [
+        "./build.c"
+    ],
+    "build-script-exe": "./build.out",
+    "build-script-compile-cmd": "clang -std=c99 build.c -o build.out -lzmm"
+}

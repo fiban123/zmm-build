@@ -15,4 +15,6 @@
 #define API __attribute__((visibility("default")))
 #endif
 
+#define UNUSED __attribute__((unused))
+
 #endif

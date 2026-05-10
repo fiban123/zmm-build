@@ -1,0 +1,12 @@
+[
+    {
+        "directory": "./foo",
+        "file": "hello.c",
+        "arguments": [
+            "clang",
+            "-O3",
+            "test.c",
+            "-g"
+        ]
+    }
+]

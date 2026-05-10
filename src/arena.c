@@ -11,7 +11,7 @@ typedef struct ArenaNode {
     struct ArenaNode* next;
 } ArenaNode;
 
-void zmm_arena_init(ArenaAlloc* arena) { arena->head = nullptr; }
+void zmm_arena_init(ArenaAlloc* arena) { arena->head = NULL; }
 
 void* zmm_arena_alloc(ArenaAlloc* arena, usize size) {
     if (!arena->head || arena->head->used + size > arena->head->cap) {

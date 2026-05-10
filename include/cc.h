@@ -1,3 +1,5 @@
+#pragma once
+
 #include "arena.h"
 #include "arr.h"
 #include "export.h"

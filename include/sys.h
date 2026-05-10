@@ -23,7 +23,7 @@ typedef enum {
     EXEC_ERR_OOM
 } ExecError;
 
-// Modular struct representing solely the state of the execution
+// struct representing the state of the execution
 typedef struct {
     ChildTerm term;
     ExecError err;
@@ -38,7 +38,7 @@ typedef struct {
 /**
  * Frees the output buffer allocated by zmm_sys_exec.
  */
-API void exec_result_free(ExecResult* res);
+API void zmm_sys_exec_result_free(ExecResult* res);
 
 /**
  * Executes a command, merging stderr into stdout at the OS level.

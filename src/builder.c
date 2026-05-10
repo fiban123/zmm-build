@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "arr.h"
+#include "slice.h"
 
 typedef u32 NodeId;
 
@@ -55,8 +56,8 @@ static void queue_init(TaskQueue* q, int capacity) {
     q->tail = 0;
     q->count = 0;
     q->shutdown = false;
-    pthread_mutex_init(&q->lock, nullptr);
-    pthread_cond_init(&q->not_empty, nullptr);
+    pthread_mutex_init(&q->lock, NULL);
+    pthread_cond_init(&q->not_empty, NULL);
 }
 
 static void queue_free(TaskQueue* q) {
@@ -181,8 +182,23 @@ typedef struct {
     u32 thread_idx;
 } WorkerCtx;
 
-static bool is_dirty(SliceCU8 output, SliceCU8 const* inputs,
-                     usize num_inputs) {
+// returns true if b is newer than a
+static inline bool is_dirty_stat(const struct stat* a_stat,
+                                 const struct stat* b_stat) {
+    long a_sec = a_stat->st_mtime;
+    long b_sec = b_stat->st_mtime;
+
+    long a_nsec = a_stat->st_mtimensec;
+    long b_nsec = b_stat->st_mtimensec;
+
+    if (b_sec > a_sec) return true;
+    if (a_sec == b_sec && b_nsec > a_nsec) return true;
+
+    return false;
+}
+
+static bool is_dirty(SliceCU8 output, SliceCU8 const* inputs, usize num_inputs,
+                     SliceCU8* deps, usize n_deps) {
     char* out_path = slice_to_cstr(output);
     struct stat out_stat;
     int out_res = stat(out_path, &out_stat);
@@ -193,45 +209,41 @@ static bool is_dirty(SliceCU8 output, SliceCU8 const* inputs,
     for (usize i = 0; i < num_inputs; ++i) {
         char* in_path = slice_to_cstr(inputs[i]);
         struct stat in_stat;
-        int in_res = stat(in_path, &in_stat);
+        int b_res = stat(in_path, &in_stat);
         free(in_path);
+        if (b_res != 0) return true;
 
-        if (in_res != 0) return true;
-
-        long in_sec, in_nsec, out_sec, out_nsec;
-
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
-        // macOS and BSDs
-        in_sec = in_stat.st_mtimespec.tv_sec;
-        in_nsec = in_stat.st_mtimespec.tv_nsec;
-        out_sec = out_stat.st_mtimespec.tv_sec;
-        out_nsec = out_stat.st_mtimespec.tv_nsec;
-#elif defined(_WIN32) || defined(__MINGW32__)
-        // Windows / MinGW
-        in_sec = in_stat.st_mtime;
-        in_nsec = 0;
-        out_sec = out_stat.st_mtime;
-        out_nsec = 0;
-#else
-        // Linux / POSIX
-        in_sec = in_stat.st_mtime;
-        out_sec = out_stat.st_mtime;
-
-#if defined(st_mtime)
-        // If st_mtime is a macro, glibc aliased it to st_mtim.tv_sec
-        in_nsec = in_stat.st_mtim.tv_nsec;
-        out_nsec = out_stat.st_mtim.tv_nsec;
-#else
-        // If it's not a macro, glibc fell back to the older variable names
-        in_nsec = in_stat.st_mtimensec;
-        out_nsec = out_stat.st_mtimensec;
-#endif
-#endif
-
-        if (in_sec > out_sec) return true;
-        if (in_sec == out_sec && in_nsec > out_nsec) return true;
+        if (is_dirty_stat(&out_stat, &in_stat)) return true;
     }
+
+    for (usize i = 0; i < n_deps; ++i) {
+        char* in_path = slice_to_cstr(deps[i]);
+        struct stat in_stat;
+        int b_res = stat(in_path, &in_stat);
+        free(in_path);
+        if (b_res != 0) return true;
+
+        if (is_dirty_stat(&out_stat, &in_stat)) return true;
+    }
+
     return false;
+}
+
+// returns true if b is newer than a (a needs to be rebuilt)
+bool zmm_builder_is_dirty(SliceCU8 a_path, SliceCU8 b_path) {
+    char* a_nul = slice_to_cstr(a_path);
+    struct stat a_stat;
+    int a_res = stat(a_nul, &a_stat);
+    free(a_nul);
+    if (a_res != 0) return true;
+
+    char* b_nul = slice_to_cstr(b_path);
+    struct stat b_stat;
+    int b_res = stat(b_nul, &b_stat);
+    free(b_nul);
+    if (b_res != 0) return true;
+
+    return is_dirty_stat(&a_stat, &b_stat);
 }
 
 static void* worker_fn(void* arg) {
@@ -255,10 +267,8 @@ static void* worker_fn(void* arg) {
 
         if (node->is_target) {
             bool dirty =
-                is_dirty(node->output, node->sources, arrlenu(node->sources));
-            if (!dirty) {
-                dirty = is_dirty(node->output, node->deps, arrlenu(node->deps));
-            }
+                is_dirty(node->output, node->sources, arrlenu(node->sources),
+                         node->deps, arrlenu(node->deps));
 
             if (dirty) {
                 int res = ctx->builder(node->sources, arrlenu(node->sources),
@@ -293,7 +303,7 @@ static void* worker_fn(void* arg) {
             pthread_mutex_unlock(ctx->done_lock);
         }
     }
-    return nullptr;
+    return NULL;
 }
 
 static u32 get_system_thread_count(void) {
@@ -374,8 +384,8 @@ int zmm_builder_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
 
     pthread_mutex_t done_lock;
     pthread_cond_t done_cond;
-    pthread_mutex_init(&done_lock, nullptr);
-    pthread_cond_init(&done_cond, nullptr);
+    pthread_mutex_init(&done_lock, NULL);
+    pthread_cond_init(&done_cond, NULL);
 
     u32 num_threads = get_system_thread_count();
     pthread_t* threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
@@ -391,7 +401,7 @@ int zmm_builder_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
                               .done_lock = &done_lock,
                               .done_cond = &done_cond,
                               .thread_idx = i};
-        pthread_create(&threads[i], nullptr, worker_fn, &ctxs[i]);
+        pthread_create(&threads[i], NULL, worker_fn, &ctxs[i]);
     }
 
     // Seed the queue with leaf nodes (nodes with 0 pending dependencies)
@@ -412,7 +422,7 @@ int zmm_builder_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
     // Tear down thread pool
     queue_shutdown(&queue);
     for (u32 i = 0; i < num_threads; ++i) {
-        pthread_join(threads[i], nullptr);
+        pthread_join(threads[i], NULL);
     }
 
     free(threads);

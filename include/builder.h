@@ -46,6 +46,16 @@ API void zmm_builder_add(BuildGraph* g, SliceCU8 const* sources,
 /**
  * Execute the build for a SPECIFIC target, isolating its subgraph.
  * Runs tasks in parallel using a thread pool.
- * @return 0 on success, or non-zero if a build task failed or target wasn't found.
+ * @return 0 on success, or non-zero if a build task failed or target wasn't
+ * found.
  */
 API int zmm_builder_build(BuildGraph* g, SliceCU8 target, BuilderFn builder);
+
+/**
+ * Returns true if B is newer than A, or A or B does not exist.
+ * if it returns true, it likely means that A needs to be rebuilt.
+ *
+ * useful for just checking whether a single file needs to be rebuilt
+ * without setting up a build graph.
+ * */
+API bool zmm_builder_is_dirty(SliceCU8 a_path, SliceCU8 b_path);

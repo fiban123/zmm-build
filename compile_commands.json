@@ -1,5 +1,83 @@
 [
   {
+    "file": "src/arena.c",
+    "arguments": [
+      "/usr/bin/clang",
+      "-MMD",
+      "-MP",
+      "-MF",
+      "build/.deps/arena.d",
+      "-std=c23",
+      "-Wall",
+      "-Wextra",
+      "-fPIC",
+      "-Iinclude",
+      "-Iextern",
+      "-ggdb3",
+      "-fsanitize=address",
+      "-fsanitize=undefined",
+      "-DBUILDING_SO",
+      "-c",
+      "src/arena.c",
+      "-o",
+      "build/.obj/arena.o"
+    ],
+    "directory": "/home/fiban/dev/zmm",
+    "output": "build/.obj/arena.o"
+  },
+  {
+    "file": "src/args.c",
+    "arguments": [
+      "/usr/bin/clang",
+      "-MMD",
+      "-MP",
+      "-MF",
+      "build/.deps/args.d",
+      "-std=c23",
+      "-Wall",
+      "-Wextra",
+      "-fPIC",
+      "-Iinclude",
+      "-Iextern",
+      "-ggdb3",
+      "-fsanitize=address",
+      "-fsanitize=undefined",
+      "-DBUILDING_SO",
+      "-c",
+      "src/args.c",
+      "-o",
+      "build/.obj/args.o"
+    ],
+    "directory": "/home/fiban/dev/zmm",
+    "output": "build/.obj/args.o"
+  },
+  {
+    "file": "src/builder.c",
+    "arguments": [
+      "/usr/bin/clang",
+      "-MMD",
+      "-MP",
+      "-MF",
+      "build/.deps/builder.d",
+      "-std=c23",
+      "-Wall",
+      "-Wextra",
+      "-fPIC",
+      "-Iinclude",
+      "-Iextern",
+      "-ggdb3",
+      "-fsanitize=address",
+      "-fsanitize=undefined",
+      "-DBUILDING_SO",
+      "-c",
+      "src/builder.c",
+      "-o",
+      "build/.obj/builder.o"
+    ],
+    "directory": "/home/fiban/dev/zmm",
+    "output": "build/.obj/builder.o"
+  },
+  {
     "file": "src/cc.c",
     "arguments": [
       "/usr/bin/clang",
@@ -24,6 +102,58 @@
     ],
     "directory": "/home/fiban/dev/zmm",
     "output": "build/.obj/cc.o"
+  },
+  {
+    "file": "src/cpu.c",
+    "arguments": [
+      "/usr/bin/clang",
+      "-MMD",
+      "-MP",
+      "-MF",
+      "build/.deps/cpu.d",
+      "-std=c23",
+      "-Wall",
+      "-Wextra",
+      "-fPIC",
+      "-Iinclude",
+      "-Iextern",
+      "-ggdb3",
+      "-fsanitize=address",
+      "-fsanitize=undefined",
+      "-DBUILDING_SO",
+      "-c",
+      "src/cpu.c",
+      "-o",
+      "build/.obj/cpu.o"
+    ],
+    "directory": "/home/fiban/dev/zmm",
+    "output": "build/.obj/cpu.o"
+  },
+  {
+    "file": "src/dep.c",
+    "arguments": [
+      "/usr/bin/clang",
+      "-MMD",
+      "-MP",
+      "-MF",
+      "build/.deps/dep.d",
+      "-std=c23",
+      "-Wall",
+      "-Wextra",
+      "-fPIC",
+      "-Iinclude",
+      "-Iextern",
+      "-ggdb3",
+      "-fsanitize=address",
+      "-fsanitize=undefined",
+      "-DBUILDING_SO",
+      "-c",
+      "src/dep.c",
+      "-o",
+      "build/.obj/dep.o"
+    ],
+    "directory": "/home/fiban/dev/zmm",
+    "output": "build/.obj/dep.o"
   },
   {
     "file": "src/fs.c",
@@ -156,6 +286,32 @@
     "output": "build/.obj/stb_ds_impl.o"
   },
   {
+    "file": "src/sys.c",
+    "arguments": [
+      "/usr/bin/clang",
+      "-MMD",
+      "-MP",
+      "-MF",
+      "build/.deps/sys.d",
+      "-std=c23",
+      "-Wall",
+      "-Wextra",
+      "-fPIC",
+      "-Iinclude",
+      "-Iextern",
+      "-ggdb3",
+      "-fsanitize=address",
+      "-fsanitize=undefined",
+      "-DBUILDING_SO",
+      "-c",
+      "src/sys.c",
+      "-o",
+      "build/.obj/sys.o"
+    ],
+    "directory": "/home/fiban/dev/zmm",
+    "output": "build/.obj/sys.o"
+  },
+  {
     "file": "test/main.c",
     "arguments": [
       "/usr/bin/clang",
@@ -177,5 +333,30 @@
     ],
     "directory": "/home/fiban/dev/zmm",
     "output": "build/test.out"
+  },
+  {
+    "file": "cli/main.c",
+    "arguments": [
+      "/usr/bin/clang",
+      "-MMD",
+      "-MP",
+      "-MF",
+      "build/.deps/cli_main.d",
+      "-std=c23",
+      "-Wall",
+      "-Wextra",
+      "-fPIC",
+      "-Iinclude",
+      "-Iextern",
+      "-ggdb3",
+      "-fsanitize=address",
+      "-fsanitize=undefined",
+      "-c",
+      "cli/main.c",
+      "-o",
+      "build/.obj/cli_main.o"
+    ],
+    "directory": "/home/fiban/dev/zmm",
+    "output": "build/.obj/cli_main.o"
   }
 ]

@@ -11,7 +11,7 @@
 
 arr(SliceU8) zmm_dep_parse(SliceCU8 path) {
     char* path_nul = slice_to_cstr(path);
-    if (!path_nul) return nullptr;
+    if (!path_nul) return NULL;
 
     FILE* f = fopen(path_nul, "rb");
     free(path_nul);

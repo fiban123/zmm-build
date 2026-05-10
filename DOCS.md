@@ -677,6 +677,8 @@ Emits the accumulated thread-local buffer to stdout thread-safely.
 
 ## slice.h
 
+note: a nullslice is a slice where the ptr field is a nullptr
+
 ### `Slice(T)`
 
 ```c
@@ -691,7 +693,8 @@ Declares a slice of type T.
 #define strlit(S) ...
 ```
 
-Creates a SliceCU8 from a string literal.
+Creates a SliceCU8 string literal from a default C null-terminated string literal.
+NOTE: this *only* works with literals, do not pass an actual pointer.
 
 ### `slice_to_cstr(s)`
 
@@ -711,7 +714,7 @@ Macros for creating slice literals and arrays of slices.
 #define slice_eq(a, b) ...
 ```
 
-Returns whether two slices are equal.
+Returns whether two slices of the same type are equal.
 
 ### `slicearr_free(arr)`
 
@@ -764,13 +767,13 @@ typedef struct {
 
 represents the execution status with the allocated output buffer
 
-### `exec_result_free`
+### `zmm_sys_exec_result_free`
 
 ```c
-void exec_result_free(ExecResult* res);
+void zmm_sys_exec_result_free(ExecResult* res);
 ```
 
-Frees the output buffer allocated by zmm_sys_exec.
+Frees an ExecResult
 
 ### `zmm_sys_exec`
 
@@ -795,3 +798,29 @@ ExecStatus zmm_sys_exec_redirect(const char* arg_buf, usize num_args);
 ```
 
 Executes a command without capturing output (inherits stdio from parent).
+
+# zmm CLI documentation
+
+zmm CLI will look for a `.zmm` config file, rebuild the build script if it has changed and run the build
+script executable with the same args zmm was invoked with
+
+## Config file
+
+NOTE: the config file must be named `.zmm` and present in the CWD
+
+example config file:
+
+```json
+{
+    "build-script-srcs": [
+        "./generic.c"
+    ],
+    "build-script-exe": "./zmmexe.out",
+    "build-script-compile-cmd": "clang -Og ./generic.c -o ./zmmexe.out -lzmm"
+}
+```
+
+* `build-script-srcs`: these are the paths to the build script source files. these are used purely
+so zmm knows when the exe needs to be rebuilt. this is almost always just a single file.
+* `build-script-exe`: this is the path to the executable that zmm will invoke
+* `build-script-compile-cmd`: this is the command zmm runs if the exe needs to be rebuilt.

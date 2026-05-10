@@ -1,3 +1,6 @@
+
+#pragma once
+
 #include "export.h"
 #include "num.h"
 #include "slice.h"
@@ -62,7 +65,7 @@ SliceCU8 zmm_p_trim_dot_slash(SliceCU8 path);
 /**
  * Returns whether a character is a path separator.
  */
-[[maybe_unused]]
+UNUSED
 static inline bool zmm_p_is_separator(char c) {
 #ifdef _WIN32
     return c == '/' || c == '\\';
@@ -74,7 +77,7 @@ static inline bool zmm_p_is_separator(char c) {
 /**
  * Normalizes all separators in a path to forward slashes.
  */
-[[maybe_unused]]
+UNUSED
 inline static void zmm_p_normalize_sep(SliceU8 path) {
 #ifdef _WIN32
     for (usize i = 0; i < path.len; i++) {

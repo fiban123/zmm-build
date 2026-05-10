@@ -12,6 +12,7 @@
 #include <unistd.h>
 #endif
 
+#include "args.h"
 #include "print.h"
 
 void exec_result_free(ExecResult* res) {
@@ -28,6 +29,7 @@ void exec_result_free(ExecResult* res) {
 #ifndef _WIN32
 
 ExecResult zmm_sys_exec(const char* arg_buf, usize num_args) {
+    zmm_cmd_print(arg_buf, num_args);
     ExecResult res = {.status = {.term = {TERM_ERROR, -1}, .err = EXEC_SUCCESS},
                       .output = NullSliceU8};
 
@@ -113,6 +115,7 @@ ExecResult zmm_sys_exec(const char* arg_buf, usize num_args) {
 }
 
 ExecStatus zmm_sys_exec_redirect(const char* arg_buf, usize num_args) {
+    zmm_cmd_print(arg_buf, num_args);
     ExecStatus status = {.term = {TERM_ERROR, -1}, .err = EXEC_SUCCESS};
 
     pid_t pid = fork();
