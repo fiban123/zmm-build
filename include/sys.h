@@ -47,16 +47,22 @@ API void zmm_sys_exec_result_free(ExecResult* res);
  * @return ExecResult containing the output buffer and execution status.
  * NOTE: The caller must call exec_result_free() on the returned struct.
  */
-API ExecResult zmm_sys_exec(const char* arg_buf, usize num_args);
+API ExecResult zmm_sys_exec(char* const* argv, usize num_args);
 
 /**
  * Executes a command, merges output, prints it thread-safely, and frees the
  * output buffer.
  * @return The execution status (error and return code).
  */
-API ExecStatus zmm_sys_exec_print(const char* arg_buf, usize num_args);
+API ExecStatus zmm_sys_exec_print(char* const* argv, usize num_args);
 
 /**
  * Executes a command without capturing output (inherits stdio from parent).
  */
-API ExecStatus zmm_sys_exec_redirect(const char* arg_buf, usize num_args);
+API ExecStatus zmm_sys_exec_redirect(char* const* argv, usize num_args);
+
+API ExecResult zmm_sys_exec_flat(const char* arg_buf, usize num_args);
+
+API ExecStatus zmm_sys_exec_print_flat(const char* arg_buf, usize num_args);
+
+API ExecStatus zmm_sys_exec_redirect_flat(const char* arg_buf, usize num_args);

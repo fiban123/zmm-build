@@ -1,174 +1,444 @@
 [
     {
         "directory": "/home/fiban/dev/zmm",
-        "file": "src/cc.c",
+        "file": "src/arena.c",
         "arguments": [
-            "/usr/bin/clang",
-            "-MMD",
-            "-MP",
-            "-MF",
-            "build/.deps/cc.d",
-            "-std=c23",
-            "-Wall",
-            "-Wextra",
+            "clang",
             "-fPIC",
-            "-Iinclude",
-            "-Iextern",
+            "-std=c23",
+            "-O0",
             "-ggdb3",
-            "-fsanitize=address",
-            "-fsanitize=undefined",
-            "-DBUILDING_SO",
+            "-Iinclude/",
+            "-Iextern/",
             "-c",
-            "src/cc.c",
+            "src/arena.c",
             "-o",
-            "build/.obj/cc.o"
+            "build/.obj/src/arena.o"
         ]
     },
     {
         "directory": "/home/fiban/dev/zmm",
-        "file": "src/fs.c",
+        "file": "src/dep.c",
         "arguments": [
-            "/usr/bin/clang",
-            "-MMD",
-            "-MP",
-            "-MF",
-            "build/.deps/fs.d",
-            "-std=c23",
-            "-Wall",
-            "-Wextra",
+            "clang",
             "-fPIC",
-            "-Iinclude",
-            "-Iextern",
+            "-std=c23",
+            "-O0",
             "-ggdb3",
-            "-fsanitize=address",
-            "-fsanitize=undefined",
-            "-DBUILDING_SO",
+            "-Iinclude/",
+            "-Iextern/",
             "-c",
-            "src/fs.c",
+            "src/dep.c",
             "-o",
-            "build/.obj/fs.o"
+            "build/.obj/src/dep.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/builder.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/builder.c",
+            "-o",
+            "build/.obj/src/builder.o"
         ]
     },
     {
         "directory": "/home/fiban/dev/zmm",
         "file": "src/path.c",
         "arguments": [
-            "/usr/bin/clang",
-            "-MMD",
-            "-MP",
-            "-MF",
-            "build/.deps/path.d",
-            "-std=c23",
-            "-Wall",
-            "-Wextra",
+            "clang",
             "-fPIC",
-            "-Iinclude",
-            "-Iextern",
+            "-std=c23",
+            "-O0",
             "-ggdb3",
-            "-fsanitize=address",
-            "-fsanitize=undefined",
-            "-DBUILDING_SO",
+            "-Iinclude/",
+            "-Iextern/",
             "-c",
             "src/path.c",
             "-o",
-            "build/.obj/path.o"
+            "build/.obj/src/path.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/cpu.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/cpu.c",
+            "-o",
+            "build/.obj/src/cpu.o"
         ]
     },
     {
         "directory": "/home/fiban/dev/zmm",
         "file": "src/print.c",
         "arguments": [
-            "/usr/bin/clang",
-            "-MMD",
-            "-MP",
-            "-MF",
-            "build/.deps/print.d",
-            "-std=c23",
-            "-Wall",
-            "-Wextra",
+            "clang",
             "-fPIC",
-            "-Iinclude",
-            "-Iextern",
+            "-std=c23",
+            "-O0",
             "-ggdb3",
-            "-fsanitize=address",
-            "-fsanitize=undefined",
-            "-DBUILDING_SO",
+            "-Iinclude/",
+            "-Iextern/",
             "-c",
             "src/print.c",
             "-o",
-            "build/.obj/print.o"
+            "build/.obj/src/print.o"
         ]
     },
     {
         "directory": "/home/fiban/dev/zmm",
         "file": "src/slice.c",
         "arguments": [
-            "/usr/bin/clang",
-            "-MMD",
-            "-MP",
-            "-MF",
-            "build/.deps/slice.d",
-            "-std=c23",
-            "-Wall",
-            "-Wextra",
+            "clang",
             "-fPIC",
-            "-Iinclude",
-            "-Iextern",
+            "-std=c23",
+            "-O0",
             "-ggdb3",
-            "-fsanitize=address",
-            "-fsanitize=undefined",
-            "-DBUILDING_SO",
+            "-Iinclude/",
+            "-Iextern/",
             "-c",
             "src/slice.c",
             "-o",
-            "build/.obj/slice.o"
+            "build/.obj/src/slice.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/fs.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/fs.c",
+            "-o",
+            "build/.obj/src/fs.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/sys.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/sys.c",
+            "-o",
+            "build/.obj/src/sys.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/args.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/args.c",
+            "-o",
+            "build/.obj/src/args.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/ztime.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/ztime.c",
+            "-o",
+            "build/.obj/src/ztime.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/cc.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/cc.c",
+            "-o",
+            "build/.obj/src/cc.o"
         ]
     },
     {
         "directory": "/home/fiban/dev/zmm",
         "file": "src/stb_ds_impl.c",
         "arguments": [
-            "/usr/bin/clang",
-            "-MMD",
-            "-MP",
-            "-MF",
-            "build/.deps/stb_ds_impl.d",
-            "-std=c23",
-            "-Wall",
-            "-Wextra",
+            "clang",
             "-fPIC",
-            "-Iinclude",
-            "-Iextern",
+            "-std=c23",
+            "-O0",
             "-ggdb3",
-            "-fsanitize=address",
-            "-fsanitize=undefined",
-            "-DBUILDING_SO",
+            "-Iinclude/",
+            "-Iextern/",
             "-c",
             "src/stb_ds_impl.c",
             "-o",
-            "build/.obj/stb_ds_impl.o"
+            "build/.obj/src/stb_ds_impl.o"
         ]
     },
     {
         "directory": "/home/fiban/dev/zmm",
-        "file": "test/main.c",
+        "file": "src/builder.c",
         "arguments": [
-            "/usr/bin/clang",
-            "-std=c23",
-            "-Wall",
-            "-Wextra",
+            "clang",
             "-fPIC",
-            "-Iinclude",
-            "-Iextern",
+            "-std=c23",
+            "-O0",
             "-ggdb3",
-            "-fsanitize=address",
-            "-fsanitize=undefined",
-            "test/main.c",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/builder.c",
             "-o",
-            "build/test.out",
+            "build/.obj/src/builder.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/cpu.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
             "-ggdb3",
-            "-fsanitize=address",
-            "-fsanitize=undefined"
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/cpu.c",
+            "-o",
+            "build/.obj/src/cpu.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/cc.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/cc.c",
+            "-o",
+            "build/.obj/src/cc.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/dep.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/dep.c",
+            "-o",
+            "build/.obj/src/dep.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/path.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/path.c",
+            "-o",
+            "build/.obj/src/path.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/ztime.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/ztime.c",
+            "-o",
+            "build/.obj/src/ztime.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/arena.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/arena.c",
+            "-o",
+            "build/.obj/src/arena.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/stb_ds_impl.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/stb_ds_impl.c",
+            "-o",
+            "build/.obj/src/stb_ds_impl.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/args.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/args.c",
+            "-o",
+            "build/.obj/src/args.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/slice.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/slice.c",
+            "-o",
+            "build/.obj/src/slice.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/fs.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/fs.c",
+            "-o",
+            "build/.obj/src/fs.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/sys.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/sys.c",
+            "-o",
+            "build/.obj/src/sys.o"
+        ]
+    },
+    {
+        "directory": "/home/fiban/dev/zmm",
+        "file": "src/print.c",
+        "arguments": [
+            "clang",
+            "-fPIC",
+            "-std=c23",
+            "-O0",
+            "-ggdb3",
+            "-Iinclude/",
+            "-Iextern/",
+            "-c",
+            "src/print.c",
+            "-o",
+            "build/.obj/src/print.o"
         ]
     },
     {

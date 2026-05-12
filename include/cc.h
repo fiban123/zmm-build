@@ -1,5 +1,7 @@
 #pragma once
 
+#include <threads.h>
+
 #include "arena.h"
 #include "arr.h"
 #include "export.h"
@@ -15,6 +17,8 @@ typedef struct {
 typedef struct {
     char* current_directory;  // Tracks the currently active directory
     arr(CompileCommand) items;
+    mtx_t lock;
+    void* map;
 } CompileCommands;
 
 /**

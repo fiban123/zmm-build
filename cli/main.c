@@ -7,6 +7,7 @@
 
 #include "args.h"
 #include "arr.h"
+#include "cc.h"
 #include "num.h"
 #include "print.h"
 #include "slice.h"
@@ -314,22 +315,22 @@ int main(int argc, char** argv) {
         u8 cmd_ptrbuf[256];
 
         ArgvBuilder cmd;
-        zmm_cmd_initbuf(&cmd, cmd_buf, sizeof(cmd_buf), cmd_ptrbuf,
-                        sizeof(cmd_ptrbuf));
+        zmm_argv_initbuf(&cmd, cmd_buf, sizeof(cmd_buf), cmd_ptrbuf,
+                         sizeof(cmd_ptrbuf));
 
 #ifdef _WIN32
         zmm_cmd_appendz(&cmd, slicearr(SliceCU8, strlit("cmd"), strlit("/c"),
                                        NullSliceCU8));
 #else
-        zmm_cmd_appendz(
+        zmm_argv_appendz(
             &cmd, slicearr(SliceCU8, strlit("sh"), strlit("-c"), NullSliceCU8));
 #endif
 
-        zmm_cmd_append(&cmd, cfg.build_script_compile_cmd);
+        zmm_argv_append(&cmd, cfg.build_script_compile_cmd);
 
-        ExecStatus s = zmm_sys_exec_print(cmd.args, cmd.num_args);
+        ExecStatus s = zmm_sys_exec_print(cmd.argv, cmd.num_args);
 
-        zmm_cmd_free(&cmd);
+        zmm_argv_free(&cmd);
 
         if (s.term.type == TERM_ERROR) {
             zmm_printf("Failed to execute builder command :(\n");
@@ -357,25 +358,25 @@ int main(int argc, char** argv) {
     u8 cmd_ptrbuf[256];
 
     ArgvBuilder cmd;
-    zmm_cmd_initbuf(&cmd, cmd_buf, sizeof(cmd_buf), cmd_ptrbuf,
-                    sizeof(cmd_ptrbuf));
+    zmm_argv_initbuf(&cmd, cmd_buf, sizeof(cmd_buf), cmd_ptrbuf,
+                     sizeof(cmd_ptrbuf));
 
 #ifdef _WIN32
     zmm_cmd_pappend(&cmd, strlit(".\\"));
 #else
-    zmm_cmd_pappend(&cmd, strlit("./"));
+    zmm_argv_pappend(&cmd, strlit("./"));
 #endif
-    zmm_cmd_pappend(&cmd, cfg.build_script_exe);
-    zmm_cmd_pfinish(&cmd);
+    zmm_argv_pappend(&cmd, cfg.build_script_exe);
+    zmm_argv_pfinish(&cmd);
 
     for (int i = 1; i < argc; i++) {
-        zmm_cmd_append(&cmd, (SliceCU8){.ptr = (const u8*)argv[i],
-                                        .len = strlen(argv[i])});
+        zmm_argv_append(&cmd, (SliceCU8){.ptr = (const u8*)argv[i],
+                                         .len = strlen(argv[i])});
     }
 
-    ExecStatus s = zmm_sys_exec_redirect(cmd.args, cmd.num_args);
+    ExecStatus s = zmm_sys_exec_redirect(cmd.argv, cmd.num_args);
 
-    zmm_cmd_free(&cmd);
+    zmm_argv_free(&cmd);
 
     if (s.term.type == TERM_ERROR) {
         zmm_printf("Failed to execute build script executable :(\n");

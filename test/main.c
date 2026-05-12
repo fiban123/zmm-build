@@ -5,6 +5,7 @@
 #include "args.h"
 #include "arr.h"
 #include "builder.h"
+#include "cc.h"
 #include "cpu.h"
 #include "dep.h"
 #include "fs.h"
@@ -47,12 +48,12 @@ int builder(const SliceCU8* sources, usize num_sources, SliceCU8 output,
 int main(int argc, char** argv) {
     // argv parsing
     Argv args;
-    zmm_arg_init(&args, argc, argv);
+    zmm_args_init(&args, argc, argv);
 
     zmm_printf("did you pass the -ffast flag?: %b\n",
-               zmm_arg_contains(&args, strlit("-ffast")));
+               zmm_args_contains(&args, strlit("-ffast")));
 
-    zmm_arg_free(&args);
+    zmm_args_free(&args);
 
     // file discovery
     arr(SliceU8) a = NULL;
@@ -105,19 +106,19 @@ int main(int argc, char** argv) {
     char cmd_buf[1024];
     char cmd_ptr_buf[256];
 
-    zmm_cmd_initbuf(&cmd, cmd_buf, sizeof(cmd_buf), cmd_ptr_buf,
-                    sizeof(cmd_ptr_buf));
+    zmm_argv_initbuf(&cmd, cmd_buf, sizeof(cmd_buf), cmd_ptr_buf,
+                     sizeof(cmd_ptr_buf));
 
-    zmm_cmd_appendz(
+    zmm_argv_appendz(
         &cmd, slicearr(SliceCU8, strlit("clang"), strlit("-O3"), NullSliceCU8));
 
-    zmm_cmd_append(&cmd, strlit("test.c"));
+    zmm_argv_append(&cmd, strlit("test.c"));
 
-    zmm_cmd_pappend(&cmd, strlit("-"));
-    zmm_cmd_pappend(&cmd, strlit("g"));
-    zmm_cmd_pfinish(&cmd);
+    zmm_argv_pappend(&cmd, strlit("-"));
+    zmm_argv_pappend(&cmd, strlit("g"));
+    zmm_argv_pfinish(&cmd);
 
-    const char* p = cmd.args;
+    const char* p = cmd.flat;
     for (usize i = 0; i < cmd.num_args; i++) {
         usize len = strlen(p);
 
@@ -133,15 +134,13 @@ int main(int argc, char** argv) {
     zmm_cc_parse(&cc, &arena, strlit("compile_commands.json"));
 
     cc.current_directory = "./foo";
-    zmm_cc_append(&cc, &arena, strlit("hello.c"), cmd.args, cmd.num_args);
+    zmm_cc_append(&cc, &arena, strlit("hello.c"), cmd.flat, cmd.num_args);
 
     zmm_cc_write(&cc, strlit("new_cc.json"));
 
     zmm_cc_free(&cc);
 
-    zmm_arena_free(&arena);
-
-    zmm_cmd_free(&cmd);
+    zmm_argv_free(&cmd);
 
     // cpu info
 
@@ -162,62 +161,64 @@ int main(int argc, char** argv) {
 
     // command execution
 
-    zmm_sys_exec_redirect("ls\0-al\0", 2);
+    zmm_sys_exec_redirect_flat("ls\0-al\0", 2);
 
-    zmm_sys_exec_print("ls\0-al\0", 2);
+    zmm_sys_exec_print_flat("ls\0-al\0", 2);
 
     // DAG creation & execution
 
     BuildGraph bg;
 
-    zmm_builder_init(&bg);
+    zmm_bg_init(&bg, &arena);
 
-    zmm_builder_add(&bg,  //
-                    slicearr(SliceCU8, strlit("test1.c")), 1,
-                    strlit("obj/test1.o"),  //
-                    NULL, 0);
+    zmm_bg_add(&bg,  //
+               slicearr(SliceCU8, strlit("test1.c")), 1,
+               strlit("obj/test1.o"),  //
+               NULL, 0);
 
-    zmm_builder_add(&bg,  //
-                    slicearr(SliceCU8, strlit("test2.c")), 1,
-                    strlit("obj/test2.o"),  //
-                    NULL, 0);
+    zmm_bg_add(&bg,  //
+               slicearr(SliceCU8, strlit("test2.c")), 1,
+               strlit("obj/test2.o"),  //
+               NULL, 0);
 
-    zmm_builder_add(&bg,  //
-                    slicearr(SliceCU8, strlit("test3.c")), 1,
-                    strlit("obj/test3.o"),  //
-                    NULL, 0);
+    zmm_bg_add(&bg,  //
+               slicearr(SliceCU8, strlit("test3.c")), 1,
+               strlit("obj/test3.o"),  //
+               NULL, 0);
 
-    zmm_builder_add(&bg,  //
-                    slicearr(SliceCU8, strlit("test4.c")), 1,
-                    strlit("obj/test4.o"),  //
-                    NULL, 0);
+    zmm_bg_add(&bg,  //
+               slicearr(SliceCU8, strlit("test4.c")), 1,
+               strlit("obj/test4.o"),  //
+               NULL, 0);
 
-    zmm_builder_add(&bg,  //
-                    slicearr(SliceCU8, strlit("test5.c")), 1,
-                    strlit("obj/test5.o"),  //
-                    NULL, 0);
+    zmm_bg_add(&bg,  //
+               slicearr(SliceCU8, strlit("test5.c")), 1,
+               strlit("obj/test5.o"),  //
+               NULL, 0);
 
-    zmm_builder_add(&bg,  //
-                    slicearr(SliceCU8,
-                             strlit("obj/test1.o"),  //
-                             strlit("obj/test2.o"),  //
-                             strlit("obj/test3.o"),  //
-                             strlit("obj/test4.o"),  //
-                             strlit("obj/test5.o"),  //
-                             ),
-                    5,
-                    strlit("build/test2.out"),  //
-                    NULL, 0);
+    zmm_bg_add(&bg,  //
+               slicearr(SliceCU8,
+                        strlit("obj/test1.o"),  //
+                        strlit("obj/test2.o"),  //
+                        strlit("obj/test3.o"),  //
+                        strlit("obj/test4.o"),  //
+                        strlit("obj/test5.o"),  //
+                        ),
+               5,
+               strlit("build/test2.out"),  //
+               NULL, 0);
 
-    zmm_builder_build(&bg, strlit("build/test2.out"), builder);
+    zmm_bg_build(&bg, strlit("build/test2.out"), builder);
 
-    zmm_builder_free(&bg);
+    zmm_bg_free(&bg);
 
     // dependency file parsing:
 
     SliceCU8 dep_file = strlit("./build/.deps/fs.d");
 
-    arr(SliceU8) deps = zmm_dep_parse(dep_file);
+    arr(SliceU8) deps = arrinit;
+
+    zmm_dep_parse(&deps, dep_file);
 
     for (usize i = 0; i < arrlenu(deps); i++) {
         SliceU8 dep = deps[i];
@@ -226,4 +227,6 @@ int main(int argc, char** argv) {
     }
 
     slicearr_free(deps);
+
+    zmm_arena_free(&arena);
 }

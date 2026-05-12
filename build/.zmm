@@ -3,5 +3,5 @@
         "./build.c"
     ],
     "build-script-exe": "./build.out",
-    "build-script-compile-cmd": "clang -std=c99 build.c -o build.out -lzmm"
+    "build-script-compile-cmd": "clang -std=c99 -fsanitize=address -fsanitize=undefined build.c -o build.out -lzmm -ggdb3"
 }

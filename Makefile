@@ -4,6 +4,7 @@ ARFLAGS := rcs
 CFLAGS  := -std=c23 -Wall -Wextra -fPIC -Iinclude -Iextern
 LDFLAGS := -lzmm -lcpu_features
 
+
 # --- Performance Mode Logic ---
 ifeq ($(filter fast, $(MAKECMDGOALS)),)
     # Default (Debug/Sanitized)

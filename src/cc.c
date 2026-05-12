@@ -1,10 +1,30 @@
 #include "cc.h"
 
 #include <jsmn/jsmn.h>
+#include <khash/khash.h>
 #include <stb/stb_ds.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "fs.h"
+
+// FNV-1a hash for length-based slices
+static inline khint_t hash_slice(SliceCU8 s) {
+    khint_t h = 2166136261u;
+    for (usize i = 0; i < s.len; ++i) {
+        h = (h ^ s.ptr[i]) * 16777619u;
+    }
+    return h;
+}
+
+static inline int cmp_slice(SliceCU8 a, SliceCU8 b) {
+    if (a.len != b.len) return 0;
+    return memcmp(a.ptr, b.ptr, a.len) == 0;
+}
+
+// Instantiate the map type: kh_cc_t
+KHASH_INIT(cc_map, SliceCU8, usize, 1, hash_slice, cmp_slice)
 
 // --- Fast I/O Buffer ---
 typedef struct {
@@ -104,7 +124,6 @@ i32 zmm_cc_parse(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 path) {
     char* nul_path = slice_to_cstr(path);
     if (!nul_path) return -1;
 
-    // 1. Read the file into a temporary buffer
     FILE* f = fopen(nul_path, "rb");
     free(nul_path);
     if (!f) return -1;  // File not found or unreadable
@@ -225,28 +244,43 @@ i32 zmm_cc_parse(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 path) {
                 i = skip_token(t, tok_count, val_idx);
             }
         }
-        arrpush(cc->items, cmd);
+        if (!cc->map) cc->map = kh_init(cc_map);
+        khash_t(cc_map)* h = (khash_t(cc_map)*)cc->map;
+
+        int ret;
+        khint_t k = kh_put(cc_map, h, cmd.file, &ret);
+        if (ret == 0) {
+            cc->items[kh_val(h, k)] = cmd;
+        } else {
+            kh_val(h, k) = arrlen(cc->items);
+            arrpush(cc->items, cmd);
+        }
     }
 
-    // 4. Clean up the temporary parsing structures
     free(t);
 
-    // We can safely free the JSON buffer because the ZmmArena
-    // now owns all the unescaped string copies!
     free(json_str);
+
+    SliceU8 cwd = zmm_fs_abs_cwd();
+    char* cwd_nul = zmm_arena_alloc(arena, cwd.len + 1);
+    memcpy(cwd_nul, cwd.ptr, cwd.len);
+    cwd_nul[cwd.len] = '\0';
+
+    free(cwd.ptr);
+
+    cc->current_directory = cwd_nul;
 
     return 0;
 }
+
 i32 zmm_cc_append(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 file,
                   const char* args, usize num_args) {
-    CompileCommand new_arena;
-
-    new_arena.directory = cc->current_directory;
-    new_arena.num_args = num_args;
-
-    new_arena.file.ptr = zmm_arena_dupe(arena, file.ptr, file.len);
-    if (!new_arena.file.ptr) return -1;
-    new_arena.file.len = file.len;
+    // 1. Prepare the new command data
+    CompileCommand new_cmd;
+    new_cmd.directory = cc->current_directory;
+    new_cmd.num_args = num_args;
+    new_cmd.file.ptr = zmm_arena_dupe(arena, file.ptr, file.len);
+    new_cmd.file.len = file.len;
 
     usize packed_len = 0;
     const char* curr = args;
@@ -255,14 +289,28 @@ i32 zmm_cc_append(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 file,
         packed_len += slen + 1;
         curr += slen + 1;
     }
+    new_cmd.args = zmm_arena_dupe(arena, args, packed_len);
 
-    new_arena.args = zmm_arena_dupe(arena, args, packed_len);
-    if (!new_arena.args && num_args > 0) return -1;
+    mtx_lock(&cc->lock);
 
-    arrpush(cc->items, new_arena);
+    if (!cc->map) cc->map = kh_init(cc_map);
+    khash_t(cc_map)* h = (khash_t(cc_map)*)cc->map;
+
+    int ret;
+    khint_t k = kh_put(cc_map, h, new_cmd.file, &ret);
+
+    if (ret == 0) {
+        usize existing_idx = kh_val(h, k);
+        cc->items[existing_idx] = new_cmd;
+    } else {
+        usize new_idx = arrlen(cc->items);
+        arrpush(cc->items, new_cmd);
+        kh_val(h, k) = new_idx;
+    }
+
+    mtx_unlock(&cc->lock);
     return 0;
 }
-
 // Updated to match the raw-parameter signature of append
 i32 zmm_cc_append_dir(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 file,
                       const char* args, usize num_args, SliceCU8 dir) {
@@ -354,6 +402,9 @@ i32 zmm_cc_write(CompileCommands* cc, SliceCU8 path) {
 }
 
 void zmm_cc_free(CompileCommands* cc) {
+    if (cc->map) {
+        kh_destroy(cc_map, (khash_t(cc_map)*)cc->map);
+    }
     arrfree(cc->items);
     memset(cc, 0, sizeof(CompileCommands));
 }

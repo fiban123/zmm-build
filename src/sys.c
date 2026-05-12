@@ -22,14 +22,13 @@ void exec_result_free(ExecResult* res) {
         res->output.len = 0;
     }
 }
-
 // ----------------------------------------------------------------------------
 // POSIX Implementation
 // ----------------------------------------------------------------------------
 #ifndef _WIN32
 
-ExecResult zmm_sys_exec(const char* arg_buf, usize num_args) {
-    zmm_cmd_print(arg_buf, num_args);
+ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
+    zmm_argv_print(argv, num_args);
     ExecResult res = {.status = {.term = {TERM_ERROR, -1}, .err = EXEC_SUCCESS},
                       .output = NullSliceU8};
 
@@ -57,15 +56,9 @@ ExecResult zmm_sys_exec(const char* arg_buf, usize num_args) {
         close(pipe_fds[0]);
         close(pipe_fds[1]);
 
-        char* argv_ptrs[num_args + 1];
-        const char* current = arg_buf;
-        for (usize i = 0; i < num_args; i++) {
-            argv_ptrs[i] = (char*)current;
-            current += strlen(current) + 1;
-        }
-        argv_ptrs[num_args] = NULL;
-
-        execvp(argv_ptrs[0], argv_ptrs);
+        // No VLA needed! argv is already built and null-terminated by
+        // ArgvBuilder
+        execvp(argv[0], argv);
         _exit(1);
     }
 
@@ -114,8 +107,8 @@ ExecResult zmm_sys_exec(const char* arg_buf, usize num_args) {
     return res;
 }
 
-ExecStatus zmm_sys_exec_redirect(const char* arg_buf, usize num_args) {
-    zmm_cmd_print(arg_buf, num_args);
+ExecStatus zmm_sys_exec_redirect(char* const* argv, usize num_args) {
+    zmm_argv_print(argv, num_args);
     ExecStatus status = {.term = {TERM_ERROR, -1}, .err = EXEC_SUCCESS};
 
     pid_t pid = fork();
@@ -125,15 +118,8 @@ ExecStatus zmm_sys_exec_redirect(const char* arg_buf, usize num_args) {
     }
 
     if (pid == 0) {
-        char* argv_ptrs[num_args + 1];
-        const char* current = arg_buf;
-        for (usize i = 0; i < num_args; i++) {
-            argv_ptrs[i] = (char*)current;
-            current += strlen(current) + 1;
-        }
-        argv_ptrs[num_args] = NULL;
-
-        execvp(argv_ptrs[0], argv_ptrs);
+        // No VLA needed here either
+        execvp(argv[0], argv);
         _exit(1);
     }
 
@@ -150,22 +136,20 @@ ExecStatus zmm_sys_exec_redirect(const char* arg_buf, usize num_args) {
 
     return status;
 }
-
 // ----------------------------------------------------------------------------
 // Windows Implementation
 // ----------------------------------------------------------------------------
 #else
 
-static char* build_win32_cmdline(const char* arg_buf, usize num_args) {
+static char* build_win32_cmdline(char* const* argv, usize num_args) {
     usize cmd_cap = 1024;
     char* cmd = (char*)malloc(cmd_cap);
     if (!cmd) return NULL;
 
     usize cmd_len = 0;
-    const char* current = arg_buf;
 
     for (usize i = 0; i < num_args; i++) {
-        usize arg_len = strlen(current);
+        usize arg_len = strlen(argv[i]);
         if (cmd_len + arg_len + 4 > cmd_cap) {
             cmd_cap = (cmd_len + arg_len + 4) * 2;
             char* new_cmd = (char*)realloc(cmd, cmd_cap);
@@ -178,17 +162,15 @@ static char* build_win32_cmdline(const char* arg_buf, usize num_args) {
 
         if (i > 0) cmd[cmd_len++] = ' ';
         cmd[cmd_len++] = '"';
-        memcpy(cmd + cmd_len, current, arg_len);
+        memcpy(cmd + cmd_len, argv[i], arg_len);
         cmd_len += arg_len;
         cmd[cmd_len++] = '"';
-
-        current += arg_len + 1;
     }
     cmd[cmd_len] = '\0';
     return cmd;
 }
 
-ExecResult exec_cmd(const char* arg_buf, usize num_args) {
+ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
     ExecResult res = {.status = {.term = {TERM_ERROR, -1}, .err = EXEC_SUCCESS},
                       .output = NullSliceU8};
 
@@ -213,7 +195,7 @@ ExecResult exec_cmd(const char* arg_buf, usize num_args) {
     si.hStdError = write_pipe;
 
     PROCESS_INFORMATION pi = {0};
-    char* cmd_line = build_win32_cmdline(arg_buf, num_args);
+    char* cmd_line = build_win32_cmdline(argv, num_args);
     if (!cmd_line) {
         CloseHandle(read_pipe);
         CloseHandle(write_pipe);
@@ -276,14 +258,14 @@ ExecResult exec_cmd(const char* arg_buf, usize num_args) {
     return res;
 }
 
-ExecStatus exec_redirect(const char* arg_buf, usize num_args) {
+ExecStatus zmm_sys_exec_redirect(char* const* argv, usize num_args) {
     ExecStatus status = {.term = {TERM_ERROR, -1}, .err = EXEC_SUCCESS};
 
     STARTUPINFOA si = {0};
     si.cb = sizeof(STARTUPINFOA);
     PROCESS_INFORMATION pi = {0};
 
-    char* cmd_line = build_win32_cmdline(arg_buf, num_args);
+    char* cmd_line = build_win32_cmdline(argv, num_args);
     if (!cmd_line) {
         status.err = EXEC_ERR_OOM;
         return status;
@@ -314,8 +296,8 @@ ExecStatus exec_redirect(const char* arg_buf, usize num_args) {
 // Shared Implementation
 // ----------------------------------------------------------------------------
 
-ExecStatus zmm_sys_exec_print(const char* arg_buf, usize num_args) {
-    ExecResult res = zmm_sys_exec(arg_buf, num_args);
+ExecStatus zmm_sys_exec_print(char* const* argv, usize num_args) {
+    ExecResult res = zmm_sys_exec(argv, num_args);
 
     if (res.status.err == EXEC_SUCCESS && res.output.len > 0) {
         SliceCU8 out_slice = {.ptr = res.output.ptr, .len = res.output.len};
@@ -327,4 +309,80 @@ ExecStatus zmm_sys_exec_print(const char* arg_buf, usize num_args) {
     exec_result_free(&res);
 
     return final_status;
+}
+
+// ----------------------------------------------------------------------------
+// Flat Buffer Wrappers (Platform Agnostic)
+// ----------------------------------------------------------------------------
+
+ExecResult zmm_sys_exec_flat(const char* arg_buf, usize num_args) {
+    if (num_args == 0) {
+        return (ExecResult){
+            .status = {.term = {TERM_ERROR, -1}, .err = EXEC_SUCCESS},
+            .output = NullSliceU8};
+    }
+
+    // Heap-allocate the pointer array (+1 for the NULL terminator)
+    char** argv = (char**)malloc((num_args + 1) * sizeof(char*));
+    if (!argv) {
+        return (ExecResult){
+            .status = {.term = {TERM_ERROR, -1}, .err = EXEC_ERR_OOM},
+            .output = NullSliceU8};
+    }
+
+    // Traverse the packed buffer and populate pointers
+    const char* current = arg_buf;
+    for (usize i = 0; i < num_args; i++) {
+        // Cast away const to match the char* const* signature required by
+        // execvp
+        argv[i] = (char*)current;
+        current += strlen(current) + 1;
+    }
+    argv[num_args] = NULL;
+
+    // Forward to the array-based implementation
+    ExecResult res = zmm_sys_exec(argv, num_args);
+
+    free(argv);
+    return res;
+}
+
+ExecStatus zmm_sys_exec_print_flat(const char* arg_buf, usize num_args) {
+    ExecResult res = zmm_sys_exec_flat(arg_buf, num_args);
+
+    if (res.status.err == EXEC_SUCCESS && res.output.len > 0) {
+        SliceCU8 out_slice = {.ptr = res.output.ptr, .len = res.output.len};
+        zmm_printf("%s\n", out_slice);
+    }
+
+    ExecStatus final_status = res.status;
+    exec_result_free(&res);
+
+    return final_status;
+}
+
+ExecStatus zmm_sys_exec_redirect_flat(const char* arg_buf, usize num_args) {
+    if (num_args == 0) {
+        return (ExecStatus){.term = {TERM_ERROR, -1}, .err = EXEC_SUCCESS};
+    }
+
+    // Heap-allocate the pointer array (+1 for the NULL terminator)
+    char** argv = (char**)malloc((num_args + 1) * sizeof(char*));
+    if (!argv) {
+        return (ExecStatus){.term = {TERM_ERROR, -1}, .err = EXEC_ERR_OOM};
+    }
+
+    // Traverse the packed buffer and populate pointers
+    const char* current = arg_buf;
+    for (usize i = 0; i < num_args; i++) {
+        argv[i] = (char*)current;
+        current += strlen(current) + 1;
+    }
+    argv[num_args] = NULL;
+
+    // Forward to the array-based implementation
+    ExecStatus status = zmm_sys_exec_redirect(argv, num_args);
+
+    free(argv);
+    return status;
 }

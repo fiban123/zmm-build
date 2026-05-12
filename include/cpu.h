@@ -2,8 +2,8 @@
 
 #include <cpu_features/cpu_features_cache_info.h>
 #include <cpu_features/cpuinfo_x86.h>
-#include <export.h>
 
+#include "export.h"
 #include "num.h"
 #include "slice.h"
 

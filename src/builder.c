@@ -1,22 +1,40 @@
 #include "builder.h"
 
-#include <pthread.h>
+#include <khash/khash.h>
 #include <stb/stb_ds.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
+#include <threads.h>
 #include <unistd.h>
 
+#include "arena.h"
 #include "arr.h"
 #include "slice.h"
 
-typedef u32 NodeId;
+typedef u64 NodeId;
 
-// stb_ds string map structure
-typedef struct NodeMap {
-    char* key;
-    NodeId value;
-} NodeMap;
+// --- khash Map Implementation ---
+
+// FNV-1 hash implementation for length-based string slices
+static inline khint_t hash_slicecu8(SliceCU8 s) {
+    khint_t h = 2166136261U;
+    for (usize i = 0; i < s.len; ++i) {
+        h *= 16777619U;
+        h ^= s.ptr[i];
+    }
+    return h;
+}
+
+// Equality check for length-based string slices
+static inline int eq_slicecu8(SliceCU8 a, SliceCU8 b) {
+    if (a.len != b.len) return 0;
+    return memcmp(a.ptr, b.ptr, a.len) == 0;
+}
+
+// Instantiate khash map: Key=SliceCU8, Value=NodeId
+KHASH_INIT(node_map, SliceCU8, NodeId, 1, hash_slicecu8, eq_slicecu8)
 
 typedef struct Node {
     SliceCU8 output;
@@ -44,8 +62,8 @@ typedef struct {
     int head;
     int tail;
     int count;
-    pthread_mutex_t lock;
-    pthread_cond_t not_empty;
+    mtx_t lock;
+    cnd_t not_empty;
     bool shutdown;
 } TaskQueue;
 
@@ -56,56 +74,86 @@ static void queue_init(TaskQueue* q, int capacity) {
     q->tail = 0;
     q->count = 0;
     q->shutdown = false;
-    pthread_mutex_init(&q->lock, NULL);
-    pthread_cond_init(&q->not_empty, NULL);
+    mtx_init(&q->lock, mtx_plain);
+    cnd_init(&q->not_empty);
 }
 
 static void queue_free(TaskQueue* q) {
     free(q->buffer);
-    pthread_mutex_destroy(&q->lock);
-    pthread_cond_destroy(&q->not_empty);
+    mtx_destroy(&q->lock);
+    cnd_destroy(&q->not_empty);
 }
 
 static void queue_push(TaskQueue* q, NodeId node) {
-    pthread_mutex_lock(&q->lock);
+    mtx_lock(&q->lock);
     q->buffer[q->tail] = node;
     q->tail = (q->tail + 1) % q->capacity;
     q->count++;
-    pthread_cond_signal(&q->not_empty);
-    pthread_mutex_unlock(&q->lock);
+    cnd_signal(&q->not_empty);
+    mtx_unlock(&q->lock);
 }
 
 static bool queue_pop(TaskQueue* q, NodeId* out_node) {
-    pthread_mutex_lock(&q->lock);
+    mtx_lock(&q->lock);
     while (q->count == 0 && !q->shutdown) {
-        pthread_cond_wait(&q->not_empty, &q->lock);
+        cnd_wait(&q->not_empty, &q->lock);
     }
     if (q->shutdown && q->count == 0) {
-        pthread_mutex_unlock(&q->lock);
+        mtx_unlock(&q->lock);
         return false;
     }
     *out_node = q->buffer[q->head];
     q->head = (q->head + 1) % q->capacity;
     q->count--;
-    pthread_mutex_unlock(&q->lock);
+    mtx_unlock(&q->lock);
     return true;
 }
 
 static void queue_shutdown(TaskQueue* q) {
-    pthread_mutex_lock(&q->lock);
+    mtx_lock(&q->lock);
     q->shutdown = true;
-    pthread_cond_broadcast(&q->not_empty);  // Wake up all threads to exit
-    pthread_mutex_unlock(&q->lock);
+    cnd_broadcast(&q->not_empty);  // Wake up all threads to exit
+    mtx_unlock(&q->lock);
+}
+
+// --- String Allocation Utilities ---
+
+#define MAX_TEMP_PATH 4096
+static _Thread_local char tl_path_buf[MAX_TEMP_PATH];
+
+static inline char* slice_to_temp_cstr(SliceCU8 slice, bool* out_is_heap) {
+    *out_is_heap = false;
+    char* cstr = tl_path_buf;
+    if (slice.len < MAX_TEMP_PATH) {
+        memcpy(cstr, slice.ptr, slice.len);
+        cstr[slice.len] = '\0';
+    } else {
+        *out_is_heap = true;
+        cstr = (char*)malloc(slice.len + 1);
+        memcpy(cstr, slice.ptr, slice.len);
+        cstr[slice.len] = '\0';
+    }
+    return cstr;
+}
+
+// Helper to conveniently stat a slice without leaking memory.
+static inline int stat_slice(SliceCU8 path, struct stat* out_stat) {
+    bool is_heap;
+    char* cstr = slice_to_temp_cstr(path, &is_heap);
+    int res = stat(cstr, out_stat);
+    if (is_heap) free(cstr);
+    return res;
 }
 
 // --- Graph Utilities ---
 
-void zmm_builder_init(BuildGraph* g) {
+void zmm_bg_init(BuildGraph* g, ArenaAlloc* arena) {
     g->nodes = arrinit;
-    g->node_map = stringhm_init;
+    g->node_map = kh_init(node_map);
+    g->arena = arena;
 }
 
-void zmm_builder_free(BuildGraph* g) {
+void zmm_bg_free(BuildGraph* g) {
     if (!g) return;
 
     for (usize i = 0; i < arrlenu(g->nodes); ++i) {
@@ -116,52 +164,68 @@ void zmm_builder_free(BuildGraph* g) {
     }
     arrfree(g->nodes);
 
-    for (usize i = 0; i < shlenu(g->node_map); ++i) {
-        free(g->node_map[i]
-                 .key);  // Free the allocated C-strings used as map keys
+    if (g->node_map) {
+        kh_destroy(node_map, (khash_t(node_map)*)g->node_map);
     }
-    shfree(g->node_map);
 }
 
 static NodeId get_or_put_node(BuildGraph* g, SliceCU8 path) {
-    char* cstr = slice_to_cstr(path);
-    ptrdiff_t index = shgeti(g->node_map, cstr);
+    khash_t(node_map)* h = (khash_t(node_map)*)g->node_map;
 
-    if (index >= 0) {
-        free(cstr);  // Already exists, free the temp string
-        return g->node_map[index].value;
+    khint_t k = kh_get(node_map, h, path);
+    if (k != kh_end(h)) {
+        return kh_val(h, k);
     }
 
-    // New node
+    // New node, so we need persistent memory for the map key.
+    // Allocate it in the arena. No null terminator needed for khash.
+    SliceCU8 perm_key;
+    perm_key.len = path.len;
+    perm_key.ptr = (const u8*)zmm_arena_dupe(g->arena, path.ptr, path.len);
+
     NodeId id = (NodeId)arrlenu(g->nodes);
     Node n = {0};
-    n.output = path;
+
+    // Reuse the persistent arena slice for the node output
+    n.output = perm_key;
     arrpush(g->nodes, n);
 
-    // Put in map. The map uses `cstr` directly as the key pointer, so we DO NOT
-    // free it here. It will be freed in zmm_builder_graph_deinit.
-    shput(g->node_map, cstr, id);
+    // Put in map
+    int ret;
+    k = kh_put(node_map, h, perm_key, &ret);
+    kh_val(h, k) = id;
 
     return id;
 }
 
-void zmm_builder_add(BuildGraph* g, SliceCU8 const* sources, usize num_sources,
-                     SliceCU8 output, SliceCU8 const* deps, usize num_deps) {
+void zmm_bg_add(BuildGraph* g, SliceCU8 const* sources, usize num_sources,
+                SliceCU8 output, SliceCU8 const* deps, usize num_deps) {
     NodeId out_id = get_or_put_node(g, output);
     g->nodes[out_id].is_target = true;
 
-    for (usize i = 0; i < num_sources; ++i)
-        arrpush(g->nodes[out_id].sources, sources[i]);
-    for (usize i = 0; i < num_deps; ++i)
-        arrpush(g->nodes[out_id].deps, deps[i]);
+    // Duplicate memory for sources into arena
+    for (usize i = 0; i < num_sources; ++i) {
+        SliceCU8 duped;
+        duped.len = sources[i].len;
+        duped.ptr =
+            (const u8*)zmm_arena_dupe(g->arena, sources[i].ptr, sources[i].len);
+        arrpush(g->nodes[out_id].sources, duped);
+    }
+
+    // Duplicate memory for deps into arena
+    for (usize i = 0; i < num_deps; ++i) {
+        SliceCU8 duped;
+        duped.len = deps[i].len;
+        duped.ptr =
+            (const u8*)zmm_arena_dupe(g->arena, deps[i].ptr, deps[i].len);
+        arrpush(g->nodes[out_id].deps, duped);
+    }
 
     SliceCU8 const* lists[2] = {sources, deps};
     usize counts[2] = {num_sources, num_deps};
 
     for (int list_idx = 0; list_idx < 2; ++list_idx) {
         for (usize i = 0; i < counts[list_idx]; ++i) {
-            // Note: get_or_put_node might stretch g->nodes, invalidating direct
-            // pointers. Always operate via array indexing!
             NodeId dep_id = get_or_put_node(g, lists[list_idx][i]);
             arrpush(g->nodes[dep_id].dependents, out_id);
             arrpush(g->nodes[out_id].waits_on, dep_id);
@@ -177,8 +241,8 @@ typedef struct {
     TaskQueue* queue;
     _Atomic bool* has_error;
     _Atomic u32* remaining_nodes;
-    pthread_mutex_t* done_lock;
-    pthread_cond_t* done_cond;
+    mtx_t* done_lock;
+    cnd_t* done_cond;
     u32 thread_idx;
 } WorkerCtx;
 
@@ -199,30 +263,19 @@ static inline bool is_dirty_stat(const struct stat* a_stat,
 
 static bool is_dirty(SliceCU8 output, SliceCU8 const* inputs, usize num_inputs,
                      SliceCU8* deps, usize n_deps) {
-    char* out_path = slice_to_cstr(output);
     struct stat out_stat;
-    int out_res = stat(out_path, &out_stat);
-    free(out_path);
-
-    if (out_res != 0) return true;  // Output doesn't exist
+    if (stat_slice(output, &out_stat) != 0)
+        return true;  // Output doesn't exist
 
     for (usize i = 0; i < num_inputs; ++i) {
-        char* in_path = slice_to_cstr(inputs[i]);
         struct stat in_stat;
-        int b_res = stat(in_path, &in_stat);
-        free(in_path);
-        if (b_res != 0) return true;
-
+        if (stat_slice(inputs[i], &in_stat) != 0) return true;
         if (is_dirty_stat(&out_stat, &in_stat)) return true;
     }
 
     for (usize i = 0; i < n_deps; ++i) {
-        char* in_path = slice_to_cstr(deps[i]);
         struct stat in_stat;
-        int b_res = stat(in_path, &in_stat);
-        free(in_path);
-        if (b_res != 0) return true;
-
+        if (stat_slice(deps[i], &in_stat) != 0) return true;
         if (is_dirty_stat(&out_stat, &in_stat)) return true;
     }
 
@@ -230,23 +283,16 @@ static bool is_dirty(SliceCU8 output, SliceCU8 const* inputs, usize num_inputs,
 }
 
 // returns true if b is newer than a (a needs to be rebuilt)
-bool zmm_builder_is_dirty(SliceCU8 a_path, SliceCU8 b_path) {
-    char* a_nul = slice_to_cstr(a_path);
-    struct stat a_stat;
-    int a_res = stat(a_nul, &a_stat);
-    free(a_nul);
-    if (a_res != 0) return true;
+bool zmm_bg_is_dirty(SliceCU8 a_path, SliceCU8 b_path) {
+    struct stat a_stat, b_stat;
 
-    char* b_nul = slice_to_cstr(b_path);
-    struct stat b_stat;
-    int b_res = stat(b_nul, &b_stat);
-    free(b_nul);
-    if (b_res != 0) return true;
+    if (stat_slice(a_path, &a_stat) != 0) return true;
+    if (stat_slice(b_path, &b_stat) != 0) return true;
 
     return is_dirty_stat(&a_stat, &b_stat);
 }
 
-static void* worker_fn(void* arg) {
+static int worker_fn(void* arg) {
     WorkerCtx* ctx = (WorkerCtx*)arg;
     NodeId node_id;
 
@@ -256,9 +302,9 @@ static void* worker_fn(void* arg) {
         if (atomic_load_explicit(ctx->has_error, memory_order_acquire)) {
             u32 rem = atomic_fetch_sub(ctx->remaining_nodes, 1);
             if (rem == 1) {
-                pthread_mutex_lock(ctx->done_lock);
-                pthread_cond_signal(ctx->done_cond);
-                pthread_mutex_unlock(ctx->done_lock);
+                mtx_lock(ctx->done_lock);
+                cnd_signal(ctx->done_cond);
+                mtx_unlock(ctx->done_lock);
             }
             continue;
         }
@@ -298,12 +344,12 @@ static void* worker_fn(void* arg) {
         // Signal completion of this node
         u32 rem = atomic_fetch_sub(ctx->remaining_nodes, 1);
         if (rem == 1) {
-            pthread_mutex_lock(ctx->done_lock);
-            pthread_cond_signal(ctx->done_cond);
-            pthread_mutex_unlock(ctx->done_lock);
+            mtx_lock(ctx->done_lock);
+            cnd_signal(ctx->done_cond);
+            mtx_unlock(ctx->done_lock);
         }
     }
-    return NULL;
+    return 0;
 }
 
 static u32 get_system_thread_count(void) {
@@ -354,13 +400,12 @@ static void mark_subgraph(BuildGraph* g, NodeId start_id,
     arrfree(stack);
 }
 
-int zmm_builder_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
-    char* target_cstr = slice_to_cstr(target);
-    ptrdiff_t target_idx = shgeti(g->node_map, target_cstr);
-    free(target_cstr);
+int zmm_bg_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
+    khash_t(node_map)* h = (khash_t(node_map)*)g->node_map;
+    khint_t target_idx = kh_get(node_map, h, target);
 
-    if (target_idx < 0) return 1;  // Target not found
-    NodeId target_id = g->node_map[target_idx].value;
+    if (target_idx == kh_end(h)) return 1;  // Target not found
+    NodeId target_id = kh_val(h, target_idx);
 
     // Reset subgraph state for a clean run
     for (usize i = 0; i < arrlenu(g->nodes); ++i) {
@@ -382,13 +427,13 @@ int zmm_builder_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
     _Atomic bool has_error;
     atomic_init(&has_error, false);
 
-    pthread_mutex_t done_lock;
-    pthread_cond_t done_cond;
-    pthread_mutex_init(&done_lock, NULL);
-    pthread_cond_init(&done_cond, NULL);
+    mtx_t done_lock;
+    cnd_t done_cond;
+    mtx_init(&done_lock, mtx_plain);
+    cnd_init(&done_cond);
 
     u32 num_threads = get_system_thread_count();
-    pthread_t* threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
+    thrd_t* threads = (thrd_t*)malloc(num_threads * sizeof(thrd_t));
     WorkerCtx* ctxs = (WorkerCtx*)malloc(num_threads * sizeof(WorkerCtx));
 
     // Spin up thread pool
@@ -401,7 +446,7 @@ int zmm_builder_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
                               .done_lock = &done_lock,
                               .done_cond = &done_cond,
                               .thread_idx = i};
-        pthread_create(&threads[i], NULL, worker_fn, &ctxs[i]);
+        thrd_create(&threads[i], worker_fn, &ctxs[i]);
     }
 
     // Seed the queue with leaf nodes (nodes with 0 pending dependencies)
@@ -413,23 +458,80 @@ int zmm_builder_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
     }
 
     // Main thread blocks here until the target subgraph is fully resolved
-    pthread_mutex_lock(&done_lock);
+    mtx_lock(&done_lock);
     while (atomic_load(&remaining_nodes) > 0) {
-        pthread_cond_wait(&done_cond, &done_lock);
+        cnd_wait(&done_cond, &done_lock);
     }
-    pthread_mutex_unlock(&done_lock);
+    mtx_unlock(&done_lock);
 
     // Tear down thread pool
     queue_shutdown(&queue);
     for (u32 i = 0; i < num_threads; ++i) {
-        pthread_join(threads[i], NULL);
+        thrd_join(threads[i], NULL);
     }
 
     free(threads);
     free(ctxs);
-    pthread_mutex_destroy(&done_lock);
-    pthread_cond_destroy(&done_cond);
+    mtx_destroy(&done_lock);
+    cnd_destroy(&done_cond);
     queue_free(&queue);
 
     return atomic_load(&has_error) ? 1 : 0;
+}
+
+static void add_dependency_edge(BuildGraph* g, NodeId target_id,
+                                SliceCU8 dep_path) {
+    // Note: get_or_put_node might resize g->nodes. Because we use NodeId
+    // (indices) instead of pointers, this is 100% safe.
+    NodeId dep_id = get_or_put_node(g, dep_path);
+    arrpush(g->nodes[dep_id].dependents, target_id);
+    arrpush(g->nodes[target_id].waits_on, dep_id);
+}
+
+void zmm_tg_init_out(TargetBuilder* tg, BuildGraph* g, SliceCU8 output) {
+    NodeId id = get_or_put_node(g, output);
+    g->nodes[id].is_target = true;
+    tg->g = g;
+    tg->id = id;
+}
+
+void zmm_tg_add_src(TargetBuilder* tb, SliceCU8 const* sources, usize count) {
+    for (usize i = 0; i < count; ++i) {
+        SliceCU8 duped;
+        duped.len = sources[i].len;
+        duped.ptr = (const u8*)zmm_arena_dupe(tb->g->arena, sources[i].ptr,
+                                              sources[i].len);
+
+        arrpush(tb->g->nodes[tb->id].sources, duped);
+        add_dependency_edge(tb->g, tb->id, sources[i]);
+    }
+}
+
+void zmm_tg_add_src_nc(TargetBuilder* tb, SliceCU8 const* sources,
+                       usize count) {
+    for (usize i = 0; i < count; ++i) {
+        // Push the un-copied slice directly
+        arrpush(tb->g->nodes[tb->id].sources, sources[i]);
+        add_dependency_edge(tb->g, tb->id, sources[i]);
+    }
+}
+
+void zmm_tg_add_dep(TargetBuilder* tb, SliceCU8 const* deps, usize count) {
+    for (usize i = 0; i < count; ++i) {
+        SliceCU8 duped;
+        duped.len = deps[i].len;
+        duped.ptr =
+            (const u8*)zmm_arena_dupe(tb->g->arena, deps[i].ptr, deps[i].len);
+
+        arrpush(tb->g->nodes[tb->id].deps, duped);
+        add_dependency_edge(tb->g, tb->id, deps[i]);
+    }
+}
+
+void zmm_tg_add_dep_nc(TargetBuilder* tb, SliceCU8 const* deps, usize count) {
+    for (usize i = 0; i < count; ++i) {
+        // Push the un-copied slice directly
+        arrpush(tb->g->nodes[tb->id].deps, deps[i]);
+        add_dependency_edge(tb->g, tb->id, deps[i]);
+    }
 }

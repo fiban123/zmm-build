@@ -6,10 +6,11 @@
 #include "slice.h"
 
 /**
- * Parses a compiler dependency file (.d) and returns an array of dependencies
- * as slices.
+ * Parses a compiler dependency file (.d) and appends dependencies
+ * as slices to an existing array (which may be NULL).
+ * @param deps Pointer to an stb_ds array of SliceU8. Can point to NULL
+ * initially.
  * @param path Path to the dependency file.
- * @return stb_ds array of SliceU8. The array and each slice's ptr must be
- * freed.
+ * @return 0 on success, 1 if the file could not be read.
  */
-API arr(SliceU8) zmm_dep_parse(SliceCU8 path);
+API i32 zmm_dep_parse(arr(SliceU8) * deps, SliceCU8 path);
