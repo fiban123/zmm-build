@@ -1,16 +1,17 @@
 #include "builder.h"
 
 #include <khash/khash.h>
+#include <pthread.h>
 #include <stb/stb_ds.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <threads.h>
 #include <unistd.h>
 
 #include "arena.h"
 #include "arr.h"
+#include "cpu.h"
 #include "slice.h"
 
 typedef u64 NodeId;
@@ -62,8 +63,8 @@ typedef struct {
     int head;
     int tail;
     int count;
-    mtx_t lock;
-    cnd_t not_empty;
+    pthread_mutex_t lock;
+    pthread_cond_t not_empty;
     bool shutdown;
 } TaskQueue;
 
@@ -74,46 +75,46 @@ static void queue_init(TaskQueue* q, int capacity) {
     q->tail = 0;
     q->count = 0;
     q->shutdown = false;
-    mtx_init(&q->lock, mtx_plain);
-    cnd_init(&q->not_empty);
+    pthread_mutex_init(&q->lock, NULL);
+    pthread_cond_init(&q->not_empty, NULL);
 }
 
 static void queue_free(TaskQueue* q) {
     free(q->buffer);
-    mtx_destroy(&q->lock);
-    cnd_destroy(&q->not_empty);
+    pthread_mutex_destroy(&q->lock);
+    pthread_cond_destroy(&q->not_empty);
 }
 
 static void queue_push(TaskQueue* q, NodeId node) {
-    mtx_lock(&q->lock);
+    pthread_mutex_lock(&q->lock);
     q->buffer[q->tail] = node;
     q->tail = (q->tail + 1) % q->capacity;
     q->count++;
-    cnd_signal(&q->not_empty);
-    mtx_unlock(&q->lock);
+    pthread_cond_signal(&q->not_empty);
+    pthread_mutex_unlock(&q->lock);
 }
 
 static bool queue_pop(TaskQueue* q, NodeId* out_node) {
-    mtx_lock(&q->lock);
+    pthread_mutex_lock(&q->lock);
     while (q->count == 0 && !q->shutdown) {
-        cnd_wait(&q->not_empty, &q->lock);
+        pthread_cond_wait(&q->not_empty, &q->lock);
     }
     if (q->shutdown && q->count == 0) {
-        mtx_unlock(&q->lock);
+        pthread_mutex_unlock(&q->lock);
         return false;
     }
     *out_node = q->buffer[q->head];
     q->head = (q->head + 1) % q->capacity;
     q->count--;
-    mtx_unlock(&q->lock);
+    pthread_mutex_unlock(&q->lock);
     return true;
 }
 
 static void queue_shutdown(TaskQueue* q) {
-    mtx_lock(&q->lock);
+    pthread_mutex_lock(&q->lock);
     q->shutdown = true;
-    cnd_broadcast(&q->not_empty);  // Wake up all threads to exit
-    mtx_unlock(&q->lock);
+    pthread_cond_broadcast(&q->not_empty);  // Wake up all threads to exit
+    pthread_mutex_unlock(&q->lock);
 }
 
 // --- String Allocation Utilities ---
@@ -241,8 +242,8 @@ typedef struct {
     TaskQueue* queue;
     _Atomic bool* has_error;
     _Atomic u32* remaining_nodes;
-    mtx_t* done_lock;
-    cnd_t* done_cond;
+    pthread_mutex_t* done_lock;
+    pthread_cond_t* done_cond;
     u32 thread_idx;
 } WorkerCtx;
 
@@ -252,8 +253,19 @@ static inline bool is_dirty_stat(const struct stat* a_stat,
     long a_sec = a_stat->st_mtime;
     long b_sec = b_stat->st_mtime;
 
-    long a_nsec = a_stat->st_mtimensec;
-    long b_nsec = b_stat->st_mtimensec;
+#ifdef _WIN32
+    // Windows/MinGW standard stat lacks nanosecond precision
+    long a_nsec = 0;
+    long b_nsec = 0;
+#elif defined(__APPLE__)
+    // macOS and BSD-based systems
+    long a_nsec = a_stat->st_mtimespec.tv_nsec;
+    long b_nsec = b_stat->st_mtimespec.tv_nsec;
+#else
+    // Linux and standard POSIX systems
+    long a_nsec = a_stat->st_mtim.tv_nsec;
+    long b_nsec = b_stat->st_mtim.tv_nsec;
+#endif
 
     if (b_sec > a_sec) return true;
     if (a_sec == b_sec && b_nsec > a_nsec) return true;
@@ -292,7 +304,7 @@ bool zmm_bg_is_dirty(SliceCU8 a_path, SliceCU8 b_path) {
     return is_dirty_stat(&a_stat, &b_stat);
 }
 
-static int worker_fn(void* arg) {
+static void* worker_fn(void* arg) {
     WorkerCtx* ctx = (WorkerCtx*)arg;
     NodeId node_id;
 
@@ -302,9 +314,9 @@ static int worker_fn(void* arg) {
         if (atomic_load_explicit(ctx->has_error, memory_order_acquire)) {
             u32 rem = atomic_fetch_sub(ctx->remaining_nodes, 1);
             if (rem == 1) {
-                mtx_lock(ctx->done_lock);
-                cnd_signal(ctx->done_cond);
-                mtx_unlock(ctx->done_lock);
+                pthread_mutex_lock(ctx->done_lock);
+                pthread_cond_signal(ctx->done_cond);
+                pthread_mutex_unlock(ctx->done_lock);
             }
             continue;
         }
@@ -344,17 +356,12 @@ static int worker_fn(void* arg) {
         // Signal completion of this node
         u32 rem = atomic_fetch_sub(ctx->remaining_nodes, 1);
         if (rem == 1) {
-            mtx_lock(ctx->done_lock);
-            cnd_signal(ctx->done_cond);
-            mtx_unlock(ctx->done_lock);
+            pthread_mutex_lock(ctx->done_lock);
+            pthread_cond_signal(ctx->done_cond);
+            pthread_mutex_unlock(ctx->done_lock);
         }
     }
-    return 0;
-}
-
-static u32 get_system_thread_count(void) {
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
-    return n > 0 ? (u32)n : 4;
+    return NULL;
 }
 
 // Recursively walks down dependencies to mark the subgraph we actually care
@@ -427,13 +434,13 @@ int zmm_bg_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
     _Atomic bool has_error;
     atomic_init(&has_error, false);
 
-    mtx_t done_lock;
-    cnd_t done_cond;
-    mtx_init(&done_lock, mtx_plain);
-    cnd_init(&done_cond);
+    pthread_mutex_t done_lock;
+    pthread_cond_t done_cond;
+    pthread_mutex_init(&done_lock, NULL);
+    pthread_cond_init(&done_cond, NULL);
 
-    u32 num_threads = get_system_thread_count();
-    thrd_t* threads = (thrd_t*)malloc(num_threads * sizeof(thrd_t));
+    u32 num_threads = zmm_cpu_thread_count();
+    pthread_t* threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
     WorkerCtx* ctxs = (WorkerCtx*)malloc(num_threads * sizeof(WorkerCtx));
 
     // Spin up thread pool
@@ -446,7 +453,7 @@ int zmm_bg_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
                               .done_lock = &done_lock,
                               .done_cond = &done_cond,
                               .thread_idx = i};
-        thrd_create(&threads[i], worker_fn, &ctxs[i]);
+        pthread_create(&threads[i], NULL, worker_fn, &ctxs[i]);
     }
 
     // Seed the queue with leaf nodes (nodes with 0 pending dependencies)
@@ -458,22 +465,22 @@ int zmm_bg_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
     }
 
     // Main thread blocks here until the target subgraph is fully resolved
-    mtx_lock(&done_lock);
+    pthread_mutex_lock(&done_lock);
     while (atomic_load(&remaining_nodes) > 0) {
-        cnd_wait(&done_cond, &done_lock);
+        pthread_cond_wait(&done_cond, &done_lock);
     }
-    mtx_unlock(&done_lock);
+    pthread_mutex_unlock(&done_lock);
 
     // Tear down thread pool
     queue_shutdown(&queue);
     for (u32 i = 0; i < num_threads; ++i) {
-        thrd_join(threads[i], NULL);
+        pthread_join(threads[i], NULL);
     }
 
     free(threads);
     free(ctxs);
-    mtx_destroy(&done_lock);
-    cnd_destroy(&done_cond);
+    pthread_mutex_destroy(&done_lock);
+    pthread_cond_destroy(&done_cond);
     queue_free(&queue);
 
     return atomic_load(&has_error) ? 1 : 0;

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "path.h"
 #include "slice.h"
 
 i32 zmm_dep_parse(arr(SliceU8) * deps, SliceCU8 path) {

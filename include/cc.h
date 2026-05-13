@@ -1,6 +1,6 @@
 #pragma once
 
-#include <threads.h>
+#include <pthread.h>
 
 #include "arena.h"
 #include "arr.h"
@@ -17,7 +17,7 @@ typedef struct {
 typedef struct {
     char* current_directory;  // Tracks the currently active directory
     arr(CompileCommand) items;
-    mtx_t lock;
+    pthread_mutex_t lock;
     void* map;
 } CompileCommands;
 

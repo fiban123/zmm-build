@@ -1,9 +1,8 @@
 CC      := clang
-AR      := ar
-ARFLAGS := rcs
 CFLAGS  := -std=c23 -Wall -Wextra -fPIC -Iinclude -Iextern
-LDFLAGS := -lzmm -lcpu_features
-
+LDFLAGS := 
+SO_LIBS := -lpthread -lcpu_features
+EXE_LIBS := -lzmm -lcpu_features
 
 # --- Performance Mode Logic ---
 ifeq ($(filter fast, $(MAKECMDGOALS)),)
@@ -46,15 +45,14 @@ CLI_OBJS := $(CLI_SRCS:$(CLI_DIR)/%.c=$(OBJ_DIR)/cli_%.o)
 CLI_DEPS := $(CLI_SRCS:$(CLI_DIR)/%.c=$(DEP_DIR)/cli_%.d)
 
 LIB        := $(BLD_DIR)/libzmm$(SHLIB_EXT)
-STATIC_LIB := $(BLD_DIR)/libzmm.a
 TEST       := $(BLD_DIR)/test.out
 CLI_EXE    := $(BLD_DIR)/cli$(EXE_EXT)  
 
 DEPFLAGS = -MMD -MP -MF $(DEP_DIR)/$(notdir $*).d
 
-.PHONY: all lib slib test cli clean fast lto-fast install uninstall
+.PHONY: all lib test cli clean fast lto-fast install uninstall
 
-all: lib slib test cli
+all: lib test cli
 
 fast: all
 lto-fast: all
@@ -64,20 +62,13 @@ lib: $(LIB)
 
 $(LIB): $(OBJS)
 	@mkdir -p $(BLD_DIR)
-	$(CC) $(LDFLAGS) -shared -o $@ $^
-
-# Static Library Target
-slib: $(STATIC_LIB)
-
-$(STATIC_LIB): $(OBJS)
-	@mkdir -p $(BLD_DIR)
-	$(AR) $(ARFLAGS) $@ $^
+	$(CC) $(LDFLAGS) -shared -o $@ $^ $(SO_LIBS)
 
 # CLI Target
 cli: $(CLI_EXE)
 
 $(CLI_EXE): $(CLI_OBJS) $(LIB)
-	$(CC) $(CLI_OBJS) -o $@ -L$(BLD_DIR) $(LDFLAGS)
+	$(CC) $(CLI_OBJS) -o $@ -L$(BLD_DIR) $(LDFLAGS) $(EXE_LIBS)
 
 # Library Object Rule
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
@@ -93,13 +84,13 @@ test: $(TEST)
 
 $(TEST): test/main.c $(LIB)
 	@mkdir -p $(BLD_DIR)
-	$(CC) $(CFLAGS) $< -o $@ -L$(BLD_DIR) $(LDFLAGS)
+	$(CC) $(CFLAGS) $< -o $@ -L$(BLD_DIR) $(LDFLAGS) $(EXE_LIBS)
 
 clean:
 	rm -rf $(OBJ_DIR)
 	rm -f $(LIB)
-	rm -f $(STATIC_LIB)
 	rm -f $(CLI_EXE)
+	rm -f $(TEST)
 
 # --- Installation Targets ---
 install: fast
@@ -116,9 +107,6 @@ else
 	@echo " -> Installing Shared Library to $(LIB_DIR)"
 	@install -m 644 $(LIB) $(LIB_DIR)/
 endif
-
-	@echo " -> Installing Static Library to $(LIB_DIR)"
-	@install -m 644 $(STATIC_LIB) $(LIB_DIR)/
 	
 	@echo " -> Installing Headers to $(INC_DIR)"
 	@install -m 644 include/*.h $(INC_DIR)/
@@ -130,7 +118,6 @@ uninstall:
 	rm -f $(BIN_DIR)/zmm$(EXE_EXT)
 	rm -f $(BIN_DIR)/libzmm$(SHLIB_EXT)
 	rm -f $(LIB_DIR)/libzmm$(SHLIB_EXT)
-	rm -f $(LIB_DIR)/libzmm.a
 	rm -rf $(INC_DIR)
 	@echo "Uninstallation complete!"
 

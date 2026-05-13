@@ -2,6 +2,10 @@
 
 #include <unistd.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "slice.h"
 
 void zmm_cpu_init(CpuInfo* info) {
@@ -44,8 +48,15 @@ i32 zmm_cpu_l3_size(const CpuInfo* info) {
 }
 
 i32 zmm_cpu_thread_count() {
+#ifdef _WIN32
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    u32 n = (u32)sysinfo.dwNumberOfProcessors;
+    return n > 0 ? n : 4;
+#else
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     return n > 0 ? (u32)n : 4;
+#endif
 }
 
 SliceU8 zmm_cpu_brand_string(const CpuInfo* info) {

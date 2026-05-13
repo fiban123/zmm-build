@@ -17,7 +17,7 @@ typedef struct {
 /**
  * Populates the CpuInfo struct with x86 features and cache information.
  */
-void zmm_cpu_init(CpuInfo* info);
+API void zmm_cpu_init(CpuInfo* info);
 
 /**
  * Returns whether a specific CPU feature is supported.

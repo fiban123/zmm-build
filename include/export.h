@@ -6,7 +6,7 @@
 #if defined(_WIN32) || defined(__CYGWIN__)
 // Logic for Windows
 #ifdef BUILDING_SO
-#define API __declspec(dllexport)
+#define API extern __declspec(dllexport)
 #else
 #define API __declspec(dllimport)
 #endif

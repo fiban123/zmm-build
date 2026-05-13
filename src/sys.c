@@ -150,6 +150,9 @@ static char* build_win32_cmdline(char* const* argv, usize num_args) {
 
     for (usize i = 0; i < num_args; i++) {
         usize arg_len = strlen(argv[i]);
+
+        // Expand buffer if needed (+4 accounts for a space and two potential
+        // quotes)
         if (cmd_len + arg_len + 4 > cmd_cap) {
             cmd_cap = (cmd_len + arg_len + 4) * 2;
             char* new_cmd = (char*)realloc(cmd, cmd_cap);
@@ -161,15 +164,25 @@ static char* build_win32_cmdline(char* const* argv, usize num_args) {
         }
 
         if (i > 0) cmd[cmd_len++] = ' ';
-        cmd[cmd_len++] = '"';
+
+        // Determine if quotes are necessary (contains space/tab or is empty)
+        bool needs_quotes = (arg_len == 0);
+        for (usize j = 0; j < arg_len; j++) {
+            if (argv[i][j] == ' ' || argv[i][j] == '\t') {
+                needs_quotes = true;
+                break;
+            }
+        }
+
+        // Apply quotes conditionally
+        if (needs_quotes) cmd[cmd_len++] = '"';
         memcpy(cmd + cmd_len, argv[i], arg_len);
         cmd_len += arg_len;
-        cmd[cmd_len++] = '"';
+        if (needs_quotes) cmd[cmd_len++] = '"';
     }
     cmd[cmd_len] = '\0';
     return cmd;
 }
-
 ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
     ExecResult res = {.status = {.term = {TERM_ERROR, -1}, .err = EXEC_SUCCESS},
                       .output = NullSliceU8};

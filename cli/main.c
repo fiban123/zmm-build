@@ -206,8 +206,19 @@ static inline bool is_dirty_stat(const struct stat* a_stat,
     long a_sec = a_stat->st_mtime;
     long b_sec = b_stat->st_mtime;
 
-    long a_nsec = a_stat->st_mtimensec;
-    long b_nsec = b_stat->st_mtimensec;
+#ifdef _WIN32
+    // Windows/MinGW standard stat lacks nanosecond precision
+    long a_nsec = 0;
+    long b_nsec = 0;
+#elif defined(__APPLE__)
+    // macOS and BSD-based systems
+    long a_nsec = a_stat->st_mtimespec.tv_nsec;
+    long b_nsec = b_stat->st_mtimespec.tv_nsec;
+#else
+    // Linux and standard POSIX systems
+    long a_nsec = a_stat->st_mtim.tv_nsec;
+    long b_nsec = b_stat->st_mtim.tv_nsec;
+#endif
 
     if (b_sec > a_sec) return true;
     if (a_sec == b_sec && b_nsec > a_nsec) return true;
@@ -319,8 +330,8 @@ int main(int argc, char** argv) {
                          sizeof(cmd_ptrbuf));
 
 #ifdef _WIN32
-        zmm_cmd_appendz(&cmd, slicearr(SliceCU8, strlit("cmd"), strlit("/c"),
-                                       NullSliceCU8));
+        zmm_argv_appendz(&cmd, slicearr(SliceCU8, strlit("cmd"), strlit("/S"),
+                                        strlit("/C"), NullSliceCU8));
 #else
         zmm_argv_appendz(
             &cmd, slicearr(SliceCU8, strlit("sh"), strlit("-c"), NullSliceCU8));
@@ -362,7 +373,7 @@ int main(int argc, char** argv) {
                      sizeof(cmd_ptrbuf));
 
 #ifdef _WIN32
-    zmm_cmd_pappend(&cmd, strlit(".\\"));
+    zmm_argv_pappend(&cmd, strlit(".\\"));
 #else
     zmm_argv_pappend(&cmd, strlit("./"));
 #endif

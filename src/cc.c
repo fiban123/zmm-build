@@ -291,7 +291,7 @@ i32 zmm_cc_append(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 file,
     }
     new_cmd.args = zmm_arena_dupe(arena, args, packed_len);
 
-    mtx_lock(&cc->lock);
+    pthread_mutex_lock(&cc->lock);
 
     if (!cc->map) cc->map = kh_init(cc_map);
     khash_t(cc_map)* h = (khash_t(cc_map)*)cc->map;
@@ -308,7 +308,7 @@ i32 zmm_cc_append(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 file,
         kh_val(h, k) = new_idx;
     }
 
-    mtx_unlock(&cc->lock);
+    pthread_mutex_unlock(&cc->lock);
     return 0;
 }
 // Updated to match the raw-parameter signature of append
