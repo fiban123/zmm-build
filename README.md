@@ -93,6 +93,8 @@ does not have a package of it. On linux, some distros have a package of it.
 - `libzmm` (obviously)
 - `libc`
 
+---
+
 ### Installation
 
 #### POSIX systems
@@ -263,6 +265,8 @@ A configurable, lightweight and straightforward template suitable for basic proj
 
 - **Build Script Compile Times:** GCC: ~32ms | Clang: ~40ms | TCC: ~4ms
 
+---
+
 #### `practical-exe` (318 LOC)
 
 A practical and configurable template for single executable projects.
@@ -279,6 +283,8 @@ A practical and configurable template for single executable projects.
   - `clean`: Deletes all build artifacts.
 
 - **Build Script Compile Times:** GCC: ~40ms | Clang: ~45ms | TCC: N/A
+
+---
 
 #### `practical-lib` (450 LOC)
 
