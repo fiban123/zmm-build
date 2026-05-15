@@ -21,7 +21,7 @@ While `zmm` can be used for any regular project, it was purpose-built for **asse
   - [Quick look](#quick-look)
   - [Available templates](#available-templates)
   - [Docs](#docs)
-  - [License](#license)
+- [License](#license)
 
 ---
 
@@ -51,6 +51,8 @@ While `zmm` can be used for any regular project, it was purpose-built for **asse
 | GNU Make | Moderate | Moderate | Nightmare |
 | zmm (no templates) | Hard | Hard | Easy |
 | zmm (with templates) | Easy | Moderate | Easy |
+
+---
 
 ## Features
 
@@ -142,6 +144,8 @@ A super lightweight CLI will check if the build executable is up-to-date, and re
 It uses a small configuration file for the compilation command and other basic info.
 
 See more in the [docs](DOCS.md#zmm-CLI)
+
+---
 
 ### Quick look
 
@@ -235,6 +239,8 @@ If you wanted to run the build script with a `-ffast` arg (does not exist in thi
 zmm -ffast
 ```
 
+---
+
 ### Available templates
 
 Templates can be found in [templates/](templates/)
@@ -264,13 +270,13 @@ A practical and configurable template for single executable projects.
 - **Behavior:** Compiles all `.c` files in `src/` into object files and links them into `build/exe.out`.
 - **Outputs:** Places object files in `build/.obj/` and dependency files in `build/.dep/`. Generates `compile_commands.json` at the project root.
 - **Flags:** Debug information (`-g`) is enabled by default.
-- `-ffast`: Appends the `-O3` optimization flag.
-- `-fsan`: Enables Address and Undefined behavior sanitizers.
-- `-fno-debug`: Strips the `-g` flag for clean releases.
+  - `-ffast`: Appends the `-O3` optimization flag.
+  - `-fsan`: Enables Address and Undefined behavior sanitizers.
+  - `-fno-debug`: Strips the `-g` flag for clean releases.
 
 - **Isolated flag directories:** Handles flag changes perfectly. It mangles CLI arguments into unique build subdirectories, ensuring different build configurations live in isolation. With this, you basically never need to clean the project.
 - **Arguments:**
-- `clean`: Deletes all build artifacts.
+  - `clean`: Deletes all build artifacts.
 
 - **Build Script Compile Times:** GCC: ~40ms | Clang: ~45ms | TCC: N/A
 
