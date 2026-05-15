@@ -2,29 +2,46 @@
 
 **zmm** is an ultra low-level, zero-magic compiled build system designed for maximum control and speed.
 
-Written entirely in C, `zmm` doesn't generate make or ninja files, it builds your project *directly*. Your build script is a compiled C program, which means it executes at blistering speeds (compilation of the build script itself takes roughly 4-48ms).
+Written entirely in C, `zmm` doesn't generate make or ninja files, it builds your project *directly*. Your build script is a compiled C program, which means it executes at blistering speeds (compilation of the build script itself usually takes 4-48ms).
 
 While `zmm` can be used for any regular project, it was purpose-built for **assembly projects** that require fine-grained control over compile-time dynamic assembly generation, macro passing, and architecture-specific implementations (e.g. multiprecision libraries with targeted asm and fallback C implementations).
 
 ---
 
+## Table of Contents
+
+- [Why zmm?](#why-zmm)
+  - [Bloat Comparison](#bloat-comparison)
+  - [Use-Case difficulty comparison](#use-case-difficulty-comparison)
+- [Features](#features)
+- [Getting Started](#getting-started)
+  - [Requirements](#requirements)
+  - [Installation](#installation)
+  - [CLI](#cli)
+  - [Quick look](#quick-look)
+  - [Available templates](#available-templates)
+  - [Docs](#docs)
+  - [License](#license)
+
+---
+
 ## Why zmm?
 
-* **Zero Abstractions:** Avoid the pitfalls of "black box" build systems. If you want to link a file, you manually invoke the linker. You'll never have to ask *"Which keyword does X?"* because you are writing standard C.
-* **Blazing Fast:** Compiling a C-based build script takes 30-45ms (~4ms with tcc).
-* **Platform:** Runs flawlessly across platforms, including Windows with POSIX-emulation software.
-* **Hardware Aware:** Built-in CPU capability detection (e.g., AVX512F, BMI2) allows you to effortlessly route builds based on the host architecture.
-* **Tiny Footprint:** The `zmm` shared library is incredibly lightweight (68KB) compared to industry standards.
+- **Zero Abstractions:** Avoid the pitfalls of "black box" build systems. If you want to link a file, you manually invoke the linker. You'll never have to ask *"Which keyword does X?"* because you are writing standard C.
+- **Blazing Fast:** Compiling a C-based build script takes 30-45ms (~4ms with tcc).
+- **Platform:** Runs flawlessly across platforms, including Windows with POSIX-emulation software.
+- **Hardware Aware:** Built-in CPU capability detection (e.g., AVX512F, BMI2) allows you to effortlessly route builds based on the host architecture.
+- **Tiny Footprint:** The `zmm` shared library is incredibly lightweight (81KB) compared to industry standards.
 
 ### Bloat Comparison
 
 | Build System | File size Bloat |
 | :--- | :--- |
-| **CMake** | ~161x more bloated than zmm (11MB) |
-| **GNU Make** | ~4.14x more bloated than zmm (282KB) |
-| **zmm** | **68KB** (peak) |
+| **CMake** | ~135x more bloated than zmm (11MB) |
+| **GNU Make** | ~3.48x more bloated than zmm (282KB) |
+| **zmm** | **81KB** (peak) |
 
->note: The CMake 11MB is coming from purely the CMake executable. this doesnt include cpack, ctest, ccmake, cmake-gui and the default cmake modules (which all come with cmake)
+>note: The CMake 11MB is coming from purely the CMake executable. This doesn't include cpack, ctest, ccmake, cmake-gui and the default cmake modules (which all come with cmake)
 
 ### Use-Case difficulty comparison
 
@@ -39,13 +56,13 @@ While `zmm` can be used for any regular project, it was purpose-built for **asse
 
 Despite being extremely low-level, the `zmm` library provides a powerful suite of tools to make writing your build script as straightforward as C allows:
 
-* **Multithreaded DAG Execution:** Build graphs that automatically handle parallel compilation and linking.
-* **Thread-Safe by Default:** Safely handle concurrent compiler invocations and utilize the custom, ergonomic, and thread-safe printing (`zmm_printf`).
-* **Modern String Handling:** Employs slices instead of fragile null-terminated strings for safer and more efficient text manipulation.
-* **Filesystem & Path Primitives:** Comprehensive tools for path manipulation, recursive file discovery (with hidden/extension filtering), changing working directories, and deleting files.
-* **Command & CLI Tools:** Safe string building for compiler/linker arguments, backed by a built-in `argv` parser to easily handle custom build flags.
-* **Compilation & Dependency Parsing:** Native support for parsing compiler dependency files, as well as parsing, modifying, and writing `compile_commands.json` for tooling support.
-* **CPU Info:** Detect CPU brand strings and specific instruction set support easily.
+- **Multithreaded DAG Execution:** Build graphs that automatically handle parallel compilation and linking.
+- **Thread-Safe by Default:** Safely handle concurrent compiler invocations and utilize the custom and thread-safe printing (`zmm_printf`).
+- **Modern String Handling:** Employs slices instead of fragile null-terminated strings for safer and more efficient text manipulation.
+- **Filesystem & Path Primitives:** Comprehensive tools for path manipulation, recursive file discovery (with hidden/extension filtering), changing working directories, and deleting files.
+- **Command & CLI Tools:** Safe string building for compiler/linker arguments, backed by an `argv` parser to easily handle custom build flags.
+- **Compilation & Dependency Parsing:** Native support for parsing compiler dependency files, as well as parsing, modifying, and writing `compile_commands.json` for LSP support.
+- **CPU Info:** Detect CPU brand strings and specific instruction set support easily.
 
 ---
 
@@ -55,11 +72,11 @@ Despite being extremely low-level, the `zmm` library provides a powerful suite o
 
 #### Compiling & Installing libzmm
 
-* C23 compiler (gcc / clang, msvc not supported)
-* `libcpu_features`
-* `libc`
-* GNU `make`
-* `MSYS2` on windows
+- C23 (gnu23) compiler (gcc / clang, msvc not supported)
+- `libcpu_features`
+- `libc`
+- GNU `make`
+- `MSYS2` on windows
 
 >Since CPU features are constantly changing, and so is the cpu_features library, I cannot
 just include some version in the source code of this repo (unlike jsmn and stb_ds). Otherwise,
@@ -69,10 +86,10 @@ does not have a package of it. On linux, some distros have a package of it.
 
 #### Compiling a build script
 
-* C99 or higher compiler (gcc / clang / tcc, msvc not supported)
-* `libcpu_features`
-* `libzmm` (obviously)
-* `libc`
+- C99 or higher compiler (gcc / clang / tcc, msvc not supported)
+- `libcpu_features`
+- `libzmm` (obviously)
+- `libc`
 
 ### Installation
 
@@ -120,7 +137,7 @@ make install PREFIX=ucrt64/
 
 ### CLI
 
-Of course, you don't need to manually compile your build scrips when you change them.
+Of course, you don't need to manually compile your build scripts when you change them.
 A super lightweight CLI will check if the build executable is up-to-date, and rebuild it if it isn't.
 It uses a small configuration file for the compilation command and other basic info.
 
@@ -128,7 +145,7 @@ See more in the [docs](DOCS.md#zmm-CLI)
 
 ### Quick look
 
-Because `zmm` build scripts are written in C, you *need* to be comfortable with pointers and manual memory management. However, **drop-in templates** are available to get your project set up quickly without starting from scratch. (see [Available Templates] and [Installation])
+Because `zmm` build scripts are written in C, you *need* to be comfortable with pointers and manual memory management. However, **drop-in templates** are available to get your project set up quickly without starting from scratch. (see [Available Templates](#available-templates))
 
 Here is a simplified example of what a `zmm` build script and config can look like. It detects CPU features, finds source files, and builds a multithreaded dependency graph (DAG). I will not hide the fact that even basic build.c files using
 zmm are already pretty long and perhaps complex. If you want to look at a real build.c file using zmm, take a look
@@ -210,7 +227,7 @@ To run this build script with the zmm CLI:
 zmm
 ```
 
-> yes, the build command is usually just that.
+> yes, the build command is usually literally just that.
 
 If you wanted to run the build script with a `-ffast` arg (does not exist in this example):
 
@@ -224,71 +241,68 @@ Templates can be found in [templates/](templates/)
 
 > The templates have not been extensively tested, they may be buggy.
 
-#### `minimal-exe`
+#### `minimal-exe` (238 LOC)
 
-* This template is very minimal but sill usable for a lot of projects. It is also very
-  configurable and sits at 238LOC.
-* This template finds all `.c` files in src/ directory and compiles & links them into an executable.
-* object files are put in `build/.obj/`
-* dep files are generated and put in `build/.dep/`
-* the resulting executable it put in `build/exe.out`
-* compile_commands are generated and put in the project root
-* cflags:
-  * `-ffast`: adds `-O3`
-  * `-fsan`: adds `-fsanitize=address` and `-fsanitize=undefined` for debugging
-* debug info is always enabled (`-g`)
-* it does not handle differing flags cleanly. when you compile the project with no `-ffast`
- edit one file, and run it again with `-ffast`, only one object file will actually be optimized
-* args:
-  * `clean`: cleans the project and exits
-  * `rebuild`: cleans the project and rebuilds it
-* build script compile-times: gcc: 32ms, clang: 40ms, tcc: 4ms
+A configurable, lightweight and straightforward template suitable for basic projects.
 
-#### `practical-exe`
+- **Behavior:** Recursively discovers all `.c` files in the `src/` directory, then compiles and links them into a single executable (`build/exe.out`).
+- **Outputs:** Places object files in `build/.obj/` and dependency files in `build/.dep/`. Automatically generates a `compile_commands.json` at the project root for LSP support.
+- **Flags:** Debug information (`-g`) is enabled by default.
+  - `-ffast`: Appends the `-O3` optimization flag.
+  - `-fsan`: Enables `-fsanitize=address` and `-fsanitize=undefined` for debugging.
 
-* This template is pretty complex but highly practical and still configurable. 318LOC
-* It takes all `.c` files in `src/`, compiles them into objs and links them into an executable
-* object files are put in `build/.obj/`
-* dep files are generated and put in `build/.dep/`
-* the resulting executable it put in `build/exe.out`
-* compile_commands are generated and put in the project root
-* cflags:
-  * `-ffast`: adds `-O3`
-  * `-fsan`: adds `-fsanitize=address` and `-fsanitize=undefined` for debugging
-  * `-fno-debug`: removes `-g` flag
-* It handles differing flags cleanly. It does this by escaping and mangling the args
-  given to zmm, and generate build files in unique directories
-  for each specific combination of args. This is extremely useful
-  and generally means you *never* need to clean your project.
-* args:
-  * `clean`: cleans the project and exists
-* build script compile-time: gcc: 40ms, clang: 45ms, tcc: -
+- **Caveat:** Does not track flag modifications between incremental runs. For example, if you add `-ffast` without cleaning first, only newly modified files will receive the optimization.
+- **Arguments:**
+  - `clean`: Deletes all build artifacts.
 
-#### `practical-lib`
+- **Build Script Compile Times:** GCC: ~32ms | Clang: ~40ms | TCC: ~4ms
 
-* This template is pretty complex but essential if you're building a library. Also
-  configurable. 450LOC
-* It takes all `.c` files in `src/`, compiles them into objs and links them into a lib
-* it can do static, dynamic libs, or both
-* additionally, main files can be specified that link with the lib for testing
-* object files are put in `build/.obj/`
-* dep files are generated and put in `build/.dep/`
-* the resulting executable it put in `build/exe.out`
-* compile_commands are generated and put in the project root
-* cflags:
-  * `-ffast`: adds `-O3`
-  * `-fsan`: adds `-fsanitize=address` and `-fsanitize=undefined` for debugging
-  * `-fno-debug`: removes `-g` flag
-* It handles differing flags cleanly. It does this by escaping and mangling the cflags
-  used to generate object files, and generate build files in unique directories
-  for each specific combination of cflags. This is extremely useful
-  and generally means you *never* need to clean your project.
-* args:
-  * `clean`: cleans the project and exists
-  * `lib`: builds the library only (shared lib by default)
-  * default: builds the library and all testing files
-* build script compile-time: gcc: 44ms, clang: 48ms, tcc: -
+#### `practical-exe` (318 LOC)
+
+A practical and configurable template for single executable projects.
+
+- **Behavior:** Compiles all `.c` files in `src/` into object files and links them into `build/exe.out`.
+- **Outputs:** Places object files in `build/.obj/` and dependency files in `build/.dep/`. Generates `compile_commands.json` at the project root.
+- **Flags:** Debug information (`-g`) is enabled by default.
+- `-ffast`: Appends the `-O3` optimization flag.
+- `-fsan`: Enables Address and Undefined behavior sanitizers.
+- `-fno-debug`: Strips the `-g` flag for clean releases.
+
+- **Isolated flag directories:** Handles flag changes perfectly. It mangles CLI arguments into unique build subdirectories, ensuring different build configurations live in isolation. With this, you basically never need to clean the project.
+- **Arguments:**
+- `clean`: Deletes all build artifacts.
+
+- **Build Script Compile Times:** GCC: ~40ms | Clang: ~45ms | TCC: N/A
+
+#### `practical-lib` (450 LOC)
+
+A practical and configurable template made for building libraries.
+
+- **Behavior:** Compiles all `.c` files in `src/` to build static libraries, dynamic libraries, or both. It also supports defining dedicated test / main files that link against the generated library.
+- **Outputs:** Places object files in `build/.obj/` and dependency files in `build/.dep/`. Generates `compile_commands.json` at the project root.
+- **Flags:** Debug information (`-g`) is enabled by default.
+  - `-ffast`: Appends the `-O3` flag.
+  - `-fsan`: Enables Address and Undefined behavior sanitizers.
+  - `-fno-debug`: Strips the `-g` flag.
+
+- **Isolated flag directories:** Handles flag changes perfectly. It mangles CLI arguments into unique build subdirectories, ensuring different build configurations live in isolation. With this, you basically never need to clean the project.
+- **Arguments:**
+  - `clean`: Deletes all build artifacts.
+  - `lib`: Component-specific build that targets only the library (defaults to a shared library).
+  - *Default:* Builds the core library alongside all specified test executables.
+
+- **Build Script Compile Times:** GCC: ~44ms | Clang: ~48ms | TCC: N/A
+
+---
 
 ### Docs
 
 The full documentation for libzmm API, and zmm CLI are in [DOCS.md](DOCS.md)
+
+## License
+
+The core **zmm** build system library and CLI are licensed under the [GNU GPLv3 license](LICENSE).
+
+However, all files inside the `templates/` directory are dedicated to the public domain under [The Unlicense](templates/LICENSE). You are free to copy, modify, publish, use, compile, sell, or distribute them in any form, commercial or non-commercial, without any attribution or restrictions.
+
+For licensing inquiries, please open an issue or a discussion directly in this GitHub repository.

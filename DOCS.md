@@ -1520,14 +1520,15 @@ Example config file:
 ```json
 {
     "build-script-srcs": [
-        "./generic.c"
+        "./build.c"
     ],
-    "build-script-exe": "./zmmexe.out",
-    "build-script-compile-cmd": "clang -Og ./generic.c -o ./zmmexe.out -lzmm"
+    "build-script-exe": "./build.out",
+    "build-script-compile-cmd": "clang -Og ./build.c -o ./build.out -lzmm"
 }
 ```
 
 - `build-script-srcs`: These are the paths to the build script source files. They are used purely
 so zmm knows when the executable needs to be rebuilt. This is almost always just a single file.
+Optionally, you can also include the `.zmm` config file itself to rebuild when the config updates.
 - `build-script-exe`: This is the path to the executable that zmm will invoke
 - `build-script-compile-cmd`: This is the command zmm runs if the executable needs to be rebuilt.
