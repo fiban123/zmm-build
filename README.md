@@ -2,9 +2,11 @@
 
 **zmm** is an ultra low-level, zero-magic compiled build system designed for maximum control and speed.
 
-Written entirely in C, `zmm` doesn't generate make or ninja files, it builds your project *directly*. Your build script is a compiled C program, which means it executes at blistering speeds (compilation of the build script itself usually takes 4-48ms).
+Written entirely in C, `zmm` doesn't generate make or ninja files, it builds your project *directly*. Your build script is a compiled C program, which means it executes at blistering speeds and allows for complex build logic (compilation of the build script itself usually takes 4-48ms).
 
 While `zmm` can be used for any regular project, it was purpose-built for **assembly projects** that require fine-grained control over compile-time dynamic assembly generation, macro passing, and architecture-specific implementations (e.g. multiprecision libraries with targeted asm and fallback C implementations).
+
+> ⚠️ `zmm` is currently in alpha.
 
 ---
 
@@ -28,7 +30,7 @@ While `zmm` can be used for any regular project, it was purpose-built for **asse
 ## Why zmm?
 
 - **Zero Abstractions:** Avoid the pitfalls of "black box" build systems. If you want to link a file, you manually invoke the linker. You'll never have to ask *"Which keyword does X?"* because you are writing standard C.
-- **Blazing Fast:** Compiling a C-based build script takes 30-45ms (~4ms with tcc).
+- **Blazing Fast:** Compiling a C-based build script usually takes 30-48ms (~4ms with tcc).
 - **Platform:** Runs flawlessly across platforms, including Windows with POSIX-emulation software.
 - **Hardware Aware:** Built-in CPU capability detection (e.g., AVX512F, BMI2) allows you to effortlessly route builds based on the host architecture.
 - **Tiny Footprint:** The `zmm` shared library is incredibly lightweight (81KB) compared to industry standards.
