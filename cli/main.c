@@ -228,6 +228,7 @@ static inline bool is_dirty_stat(const struct stat* a_stat,
 
 static bool is_dirty(SliceCU8 output, SliceCU8 const* inputs,
                      usize num_inputs) {
+    if (num_inputs == 0) return true;
     char* out_path = slice_to_cstr(output);
     struct stat out_stat;
     int out_res = stat(out_path, &out_stat);
@@ -294,9 +295,8 @@ int main(int argc, char** argv) {
 
     if (!cfg.build_script_srcs) {
         zmm_printf(
-            "Config file does not contain sources (build-script-srcs)\n");
-        return_code = 1;
-        goto cleanup;
+            "Warning: Config file does not contain sources "
+            "(build-script-srcs)\n");
     }
     if (!cfg.build_script_exe.ptr) {
         zmm_printf(
@@ -314,6 +314,9 @@ int main(int argc, char** argv) {
 
     bool dirty = is_dirty(cfg.build_script_exe, cfg.build_script_srcs,
                           arrlenu(cfg.build_script_srcs));
+
+    dirty |=
+        is_dirty(cfg.build_script_exe, slicearr(SliceCU8, strlit(".zmm")), 1);
 
     if (dirty) {
         zmm_printf("=> Compiling build script...\n");
@@ -339,20 +342,20 @@ int main(int argc, char** argv) {
 
         zmm_argv_append(&cmd, cfg.build_script_compile_cmd);
 
-        ExecStatus s = zmm_sys_exec_print(cmd.argv, cmd.num_args);
+        ChildTerm s = zmm_sys_exec_print(cmd.argv, cmd.num_args);
 
         zmm_argv_free(&cmd);
 
-        if (s.term.type == TERM_ERROR) {
+        if (s.type == TERM_ERROR) {
             zmm_printf("Failed to execute builder command :(\n");
             return_code = 1;
             goto cleanup;
-        } else if (s.term.type == TERM_SIGNALED) {
+        } else if (s.type == TERM_SIGNALED) {
             zmm_printf("Builder command forcibly terminated by OS\n");
             return_code = 1;
             goto cleanup;
         } else {
-            if (s.term.code) {
+            if (s.code) {
                 zmm_printf("Builder command failed :(\n");
                 return_code = 1;
                 goto cleanup;
@@ -385,21 +388,21 @@ int main(int argc, char** argv) {
                                          .len = strlen(argv[i])});
     }
 
-    ExecStatus s = zmm_sys_exec_redirect(cmd.argv, cmd.num_args);
+    ChildTerm s = zmm_sys_exec_redirect(cmd.argv, cmd.num_args);
 
     zmm_argv_free(&cmd);
 
-    if (s.term.type == TERM_ERROR) {
+    if (s.type == TERM_ERROR) {
         zmm_printf("Failed to execute build script executable :(\n");
         return_code = 1;
         goto cleanup;
-    } else if (s.term.type == TERM_SIGNALED) {
+    } else if (s.type == TERM_SIGNALED) {
         zmm_printf("Build script executable forcibly terminated by OS\n");
         return_code = 1;
         goto cleanup;
     }
 
-    return_code = s.term.code;
+    return_code = s.code;
 
 cleanup:
     zmmconfig_free(&cfg);

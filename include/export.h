@@ -3,6 +3,8 @@
 #ifndef EXPORT_MACROS_H
 #define EXPORT_MACROS_H
 
+#undef API
+
 #if defined(_WIN32) || defined(__CYGWIN__)
 // Logic for Windows
 #ifdef BUILDING_SO

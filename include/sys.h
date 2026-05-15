@@ -4,65 +4,87 @@
 #include "num.h"
 #include "slice.h"
 
+/**
+ * Enum of ways a child process can terminate.
+ */
 typedef enum {
-    TERM_EXITED,    // returned an exit code
-    TERM_SIGNALED,  // forcibly terminated by OS
-    TERM_ERROR      // failed to even start the process
+    TERM_EXITED,    // The process exited normally with a return code.
+    TERM_SIGNALED,  // The process was forcibly terminated by the OS.
+    TERM_ERROR      // The process failed to even start.
 } TermType;
 
+/**
+ * Information about a terminated child process.
+ */
 typedef struct {
-    TermType type;
-    i32 code;  // only valid if TermType is TERM_EXITED
+    TermType type;  // How the child process terminated
+    i32 code;       // The exit code of the process (only valid if type is TERM_EXITED).
 } ChildTerm;
 
-typedef enum {
-    EXEC_SUCCESS = 0,
-    EXEC_ERR_PIPE,
-    EXEC_ERR_FORK,
-    EXEC_ERR_CREATE_PROCESS,
-    EXEC_ERR_OOM
-} ExecError;
-
-// struct representing the state of the execution
+/**
+ * Bundles the execution status with the captured output buffer.
+ */
 typedef struct {
-    ChildTerm term;
-    ExecError err;
-} ExecStatus;
-
-// Bundles the execution status with the allocated output buffer
-typedef struct {
-    ExecStatus status;
+    ChildTerm status;
     SliceU8 output;
 } ExecResult;
 
 /**
- * Frees the output buffer allocated by zmm_sys_exec.
- */
-API void zmm_sys_exec_result_free(ExecResult* res);
-
-/**
- * Executes a command, merging stderr into stdout at the OS level.
- * @param arg_buf Packed array of null-terminated strings.
+ * Executes a command and captures its output.
+ * It merges stderr into stdout.
+ *
+ * @param argv Null-terminated array of argument strings.
  * @param num_args Number of arguments.
- * @return ExecResult containing the output buffer and execution status.
- * NOTE: The caller must call exec_result_free() on the returned struct.
+ * @return ExecResult containing the output and status.
+ *
+ * [FREE] The caller must free the output on the returned ExecResult.
  */
 API ExecResult zmm_sys_exec(char* const* argv, usize num_args);
 
 /**
- * Executes a command, merges output, prints it thread-safely, and frees the
- * output buffer.
- * @return The execution status (error and return code).
+ * Executes a command and prints its output thread-safely.
+ *
+ * @param argv Null-terminated array of argument strings.
+ * @param num_args Number of arguments.
+ * @return The execution status.
  */
-API ExecStatus zmm_sys_exec_print(char* const* argv, usize num_args);
+API ChildTerm zmm_sys_exec_print(char* const* argv, usize num_args);
 
 /**
- * Executes a command without capturing output (inherits stdio from parent).
+ * Executes a command without capturing output.
+ * The child process inherits stdout/stderr from the parent.
+ *
+ * @param argv Null-terminated array of argument strings.
+ * @param num_args Number of arguments.
+ * @return The execution status.
  */
-API ExecStatus zmm_sys_exec_redirect(char* const* argv, usize num_args);
+API ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args);
 
+/**
+ * Executes a command from a packed argument buffer and captures output.
+ *
+ * @param arg_buf Packed array of null-terminated strings.
+ * @param num_args Number of arguments.
+ * @return ExecResult containing the output and status.
+ *
+ * [FREE] The caller must free the output on the returned ExecResult.
+ */
 API ExecResult zmm_sys_exec_flat(const char* arg_buf, usize num_args);
 
-API ExecStatus zmm_sys_exec_print_flat(const char* arg_buf, usize num_args);
+/**
+ * Executes a command from a packed argument buffer and prints output.
+ *
+ * @param arg_buf Packed array of null-terminated strings.
+ * @param num_args Number of arguments.
+ * @return The execution status.
+ */
+API ChildTerm zmm_sys_exec_print_flat(const char* arg_buf, usize num_args);
 
-API ExecStatus zmm_sys_exec_redirect_flat(const char* arg_buf, usize num_args);
+/**
+ * Executes a command from a packed argument buffer without capturing output.
+ *
+ * @param arg_buf Packed array of null-terminated strings.
+ * @param num_args Number of arguments.
+ * @return The execution status.
+ */
+API ChildTerm zmm_sys_exec_redirect_flat(const char* arg_buf, usize num_args);

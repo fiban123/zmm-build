@@ -1,0 +1,7 @@
+{
+    "build-script-srcs": [
+        "./build.c"
+    ],
+    "build-script-exe": "./build.out",
+    "build-script-compile-cmd": "tcc -std=gnu23 build.c -o build.out -lzmm -g"
+}

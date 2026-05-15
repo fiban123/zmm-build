@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+;
+;
+;
+
 // --- Types ---
 typedef struct ArenaNode {
     char* mem;

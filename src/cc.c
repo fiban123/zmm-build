@@ -118,13 +118,15 @@ static SliceU8 unescape_string(const char* json, jsmntok_t* tok,
 
 // --- Public Compile Commands API ---
 
-i32 zmm_cc_parse(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 path) {
+i32 zmm_cc_init_parse(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 path) {
     memset(cc, 0, sizeof(CompileCommands));
+
+    cc->arena = arena;
 
     char* nul_path = slice_to_cstr(path);
     if (!nul_path) return -1;
 
-    FILE* f = fopen(nul_path, "rb");
+    FILE* f = fopen(nul_path, "r");
     free(nul_path);
     if (!f) return -1;  // File not found or unreadable
 
@@ -273,13 +275,13 @@ i32 zmm_cc_parse(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 path) {
     return 0;
 }
 
-i32 zmm_cc_append(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 file,
-                  const char* args, usize num_args) {
+i32 zmm_cc_append(CompileCommands* cc, SliceCU8 file, const char* args,
+                  usize num_args) {
     // 1. Prepare the new command data
     CompileCommand new_cmd;
     new_cmd.directory = cc->current_directory;
     new_cmd.num_args = num_args;
-    new_cmd.file.ptr = zmm_arena_dupe(arena, file.ptr, file.len);
+    new_cmd.file.ptr = zmm_arena_dupe(cc->arena, file.ptr, file.len);
     new_cmd.file.len = file.len;
 
     usize packed_len = 0;
@@ -289,7 +291,7 @@ i32 zmm_cc_append(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 file,
         packed_len += slen + 1;
         curr += slen + 1;
     }
-    new_cmd.args = zmm_arena_dupe(arena, args, packed_len);
+    new_cmd.args = zmm_arena_dupe(cc->arena, args, packed_len);
 
     pthread_mutex_lock(&cc->lock);
 
@@ -312,18 +314,18 @@ i32 zmm_cc_append(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 file,
     return 0;
 }
 // Updated to match the raw-parameter signature of append
-i32 zmm_cc_append_dir(CompileCommands* cc, ArenaAlloc* arena, SliceCU8 file,
-                      const char* args, usize num_args, SliceCU8 dir) {
+i32 zmm_cc_append_dir(CompileCommands* cc, SliceCU8 file, const char* args,
+                      usize num_args, SliceCU8 dir) {
     // Check if the directory changed
     if (!cc->current_directory ||
         strncmp(cc->current_directory, (const char*)dir.ptr, dir.len) != 0) {
         // Duplicate the new directory onto the arena and make it the active one
-        cc->current_directory = zmm_arena_dupe(arena, dir.ptr, dir.len + 1);
+        cc->current_directory = zmm_arena_dupe(cc->arena, dir.ptr, dir.len + 1);
         if (!cc->current_directory) return -1;
     }
 
     // Proceed with normal append
-    return zmm_cc_append(cc, arena, file, args, num_args);
+    return zmm_cc_append(cc, file, args, num_args);
 }
 
 static void write_escaped_string(OutBuffer* ob, const u8* ptr, usize len) {

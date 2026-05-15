@@ -10,14 +10,14 @@
 #include "slice.h"
 
 i32 zmm_dep_parse(arr(SliceU8) * deps, SliceCU8 path) {
-    if (!deps) return 1;
+    if (!deps) return -1;
 
     char* path_nul = slice_to_cstr(path);
-    if (!path_nul) return 1;
+    if (!path_nul) return -1;
 
     FILE* f = fopen(path_nul, "rb");
     free(path_nul);
-    if (!f) return 1;
+    if (!f) return -1;
 
     // 1024 byte fast-path
     u8 stack_buf[1024];

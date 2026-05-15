@@ -407,12 +407,9 @@ static void mark_subgraph(BuildGraph* g, NodeId start_id,
     arrfree(stack);
 }
 
-int zmm_bg_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
+int zmm_bg_build(BuildGraph* g, const SliceCU8* targets, usize num_targets,
+                 BuilderFn builder) {
     khash_t(node_map)* h = (khash_t(node_map)*)g->node_map;
-    khint_t target_idx = kh_get(node_map, h, target);
-
-    if (target_idx == kh_end(h)) return 1;  // Target not found
-    NodeId target_id = kh_val(h, target_idx);
 
     // Reset subgraph state for a clean run
     for (usize i = 0; i < arrlenu(g->nodes); ++i) {
@@ -422,10 +419,23 @@ int zmm_bg_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
     _Atomic u32 remaining_nodes;
     atomic_init(&remaining_nodes, 0);
 
-    mark_subgraph(g, target_id, &remaining_nodes);
+    // 1. Resolve all target nodes and mark their combined subgraphs
+    for (usize i = 0; i < num_targets; ++i) {
+        khint_t target_idx = kh_get(node_map, h, targets[i]);
+        if (target_idx == kh_end(h)) {
+            return 1;  // Target not found in the graph
+        }
+
+        NodeId target_id = kh_val(h, target_idx);
+
+        // mark_subgraph safely ignores nodes already marked by a previous
+        // target, so overlapping dependencies are naturally unioned and only
+        // counted once.
+        mark_subgraph(g, target_id, &remaining_nodes);
+    }
 
     u32 total_nodes = atomic_load(&remaining_nodes);
-    if (total_nodes == 0) return 0;
+    if (total_nodes == 0) return 0;  // Nothing to do
 
     // Size the queue to the max possible nodes so push() never has to block
     TaskQueue queue;
@@ -483,7 +493,7 @@ int zmm_bg_build(BuildGraph* g, SliceCU8 target, BuilderFn builder) {
     pthread_cond_destroy(&done_cond);
     queue_free(&queue);
 
-    return atomic_load(&has_error) ? 1 : 0;
+    return atomic_load(&has_error) ? -1 : 0;
 }
 
 static void add_dependency_edge(BuildGraph* g, NodeId target_id,

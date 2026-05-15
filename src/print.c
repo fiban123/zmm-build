@@ -22,44 +22,37 @@ typedef struct {
     usize written;
     FILE* stream;
 
-    // Stack-buffering for I/O (to speed up stdout)
     char* flush_buf;
     usize flush_cap;
     usize flush_len;
 
-    // Flag for thread-local accumulator
     bool is_tl;
 } ZmmWriter;
 
 // -----------------------------------------------------------------------------
-// Thread-Local Storage & Mutex
+// Thread-Local Storage (Flattened for Zero-Branch Access)
 // -----------------------------------------------------------------------------
 #define TL_INITIAL_CAP 4096
 
-// Thread-local variables (each thread gets its own instance of these)
 static _Thread_local char tl_static_buf[TL_INITIAL_CAP];
-static _Thread_local char* tl_dyn_buf =
-    NULL;  // Points to heap if we exceed 4096
+static _Thread_local char* tl_active_buf = NULL;  // Changed from tl_static_buf
 static _Thread_local usize tl_cap = TL_INITIAL_CAP;
 static _Thread_local usize tl_len = 0;
 
 static pthread_mutex_t lemit_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // -----------------------------------------------------------------------------
-// Core Block Writer (The Engine)
+// Core Block Writer
 // -----------------------------------------------------------------------------
 static inline void zmm_write_block(ZmmWriter* w, const char* data, usize len) {
     if (len == 0) return;
 
     if (w->stream) {
-        // Fast-path: Write to stack buffer first to minimize I/O system calls
         if (w->flush_len + len >= w->flush_cap) {
-            // Flush existing buffer
             if (w->flush_len > 0) {
                 fwrite(w->flush_buf, 1, w->flush_len, w->stream);
                 w->flush_len = 0;
             }
-            // If the incoming chunk is huge, bypass the buffer entirely
             if (len >= w->flush_cap) {
                 fwrite(data, 1, len, w->stream);
             } else {
@@ -71,38 +64,33 @@ static inline void zmm_write_block(ZmmWriter* w, const char* data, usize len) {
             w->flush_len += len;
         }
     } else if (w->is_tl) {
-        // Thread-local dynamic sizing logic
+        if (!tl_active_buf) tl_active_buf = tl_static_buf;
+
         usize needed = tl_len + len;
         if (needed > tl_cap) {
             usize new_cap = tl_cap * 2;
             while (new_cap < needed) new_cap *= 2;
 
-            char* new_buf;
-            if (tl_dyn_buf) {
-                new_buf = realloc(tl_dyn_buf, new_cap);
-            } else {
-                new_buf = malloc(new_cap);
-                if (new_buf) memcpy(new_buf, tl_static_buf, tl_len);
-            }
+            char* new_buf = malloc(new_cap);
+            if (!new_buf) return;  // OOM failsafe
 
-            if (new_buf) {
-                tl_dyn_buf = new_buf;
-                tl_cap = new_cap;
-            } else {
-                return;  // OOM failsafe, silently drop
-            }
+            memcpy(new_buf, tl_active_buf, tl_len);
+
+            // Only free if we were already using the heap
+            if (tl_active_buf != tl_static_buf) free(tl_active_buf);
+
+            tl_active_buf = new_buf;
+            tl_cap = new_cap;
         }
 
-        char* dest = tl_dyn_buf ? tl_dyn_buf : tl_static_buf;
-        memcpy(dest + tl_len, data, len);
+        // Zero-branching write
+        memcpy(tl_active_buf + tl_len, data, len);
         tl_len += len;
     } else if (w->buf) {
-        // Standard memory buffer logic (snprintf)
         usize space_left = 0;
         if (w->written < w->size - 1) {
             space_left = w->size - 1 - w->written;
         }
-
         usize copy_len = len < space_left ? len : space_left;
         if (copy_len > 0) {
             memcpy(w->buf + w->written, data, copy_len);
@@ -113,8 +101,17 @@ static inline void zmm_write_block(ZmmWriter* w, const char* data, usize len) {
 }
 
 // -----------------------------------------------------------------------------
-// Formatters (Now using stack buffers)
+// Formatters
 // -----------------------------------------------------------------------------
+
+// Base-100 Lookup Table: Halves the number of expensive modulo/division
+// operations
+static const char DIGIT_PAIRS[201] =
+    "0001020304050607080910111213141516171819"
+    "2021222324252627282930313233343536373839"
+    "4041424344454647484950515253545556575859"
+    "6061626364656667686970717273747576777879"
+    "8081828384858687888990919293949596979899";
 
 static inline void format_u64(ZmmWriter* w, u64 val) {
     char buf[24];
@@ -123,23 +120,29 @@ static inline void format_u64(ZmmWriter* w, u64 val) {
     if (val == 0) {
         buf[--i] = '0';
     } else {
-        while (val > 0) {
-            buf[--i] = '0' + (val % 10);
-            val /= 10;
+        while (val >= 100) {
+            unsigned const int idx = (val % 100) * 2;
+            val /= 100;
+            buf[--i] = DIGIT_PAIRS[idx + 1];
+            buf[--i] = DIGIT_PAIRS[idx];
+        }
+        if (val < 10) {
+            buf[--i] = '0' + (char)val;
+        } else {
+            unsigned const int idx = val * 2;
+            buf[--i] = DIGIT_PAIRS[idx + 1];
+            buf[--i] = DIGIT_PAIRS[idx];
         }
     }
-
     zmm_write_block(w, &buf[i], sizeof(buf) - i);
 }
 
 static inline void format_i64(ZmmWriter* w, i64 val) {
     if (val < 0) {
         zmm_write_block(w, "-", 1);
-        u64 uval = (u64)(-(val + 1)) + 1;
-        format_u64(w, uval);
-    } else {
-        format_u64(w, (u64)val);
+        val = -val;
     }
+    format_u64(w, (u64)val);
 }
 
 static inline void format_hex(ZmmWriter* w, u64 val) {
@@ -152,13 +155,14 @@ static inline void format_hex(ZmmWriter* w, u64 val) {
     } else {
         while (val > 0) {
             buf[--i] = hex_chars[val & 0xF];
-            val >>= 4;
+            val >>= 4;  // Bitwise shift is much faster than division
         }
     }
     zmm_write_block(w, &buf[i], sizeof(buf) - i);
 }
 
-static inline void format_f64(ZmmWriter* w, double val) {
+// Ready for "%.2f" - implements basic precision tracking and rounding
+static inline void format_f64(ZmmWriter* w, double val, int precision) {
     if (val < 0) {
         zmm_write_block(w, "-", 1);
         val = -val;
@@ -166,145 +170,174 @@ static inline void format_f64(ZmmWriter* w, double val) {
 
     u64 int_part = (u64)val;
     format_u64(w, int_part);
-    zmm_write_block(w, ".", 1);
 
-    char frac_buf[8];
-    double frac = val - (double)int_part;
-    for (int i = 0; i < 6; i++) {
-        frac *= 10.0;
-        int digit = (int)frac;
-        frac_buf[i] = '0' + digit;
-        frac -= digit;
+    if (precision > 0) {
+        zmm_write_block(w, ".", 1);
+        double frac = val - (double)int_part;
+
+        // Calculate multiplier for precision (e.g., 2 -> 100)
+        u64 mult = 1;
+        for (int i = 0; i < precision; i++) mult *= 10;
+
+        // Multiply and add 0.5 for standard rounding
+        u64 frac_part = (u64)(frac * mult + 0.5);
+
+        // Output fractional part, manually padding leading zeros
+        char buf[16];  // Max precision supported here is 16
+        for (int i = precision - 1; i >= 0; i--) {
+            buf[i] = '0' + (frac_part % 10);
+            frac_part /= 10;
+        }
+        zmm_write_block(w, buf, precision);
     }
-    zmm_write_block(w, frac_buf, 6);
 }
 
 // -----------------------------------------------------------------------------
-// Core Parser
+// Core Parser (Vectorized Literal Scanning + O(1) Switch)
 // -----------------------------------------------------------------------------
-
 static usize zmm_vformat(ZmmWriter* w, const char* format, va_list args) {
     const char* f = format;
 
     while (*f != '\0') {
-        const char* literal_start = f;
-        while (*f != '%' && *f != '\0') {
-            f++;
+        // Highly optimized intrinsic scan for the next '%'
+        const char* next = strchr(f, '%');
+        if (!next) {
+            zmm_write_block(w, f, strlen(f));
+            break;
         }
 
-        if (f > literal_start) {
-            zmm_write_block(w, literal_start, (usize)(f - literal_start));
+        if (next > f) {
+            zmm_write_block(w, f, (usize)(next - f));
         }
 
-        if (*f == '\0') break;
+        f = next + 1;  // Move past the '%'
 
-        f++;
         if (*f == '%') {
             zmm_write_block(w, "%", 1);
             f++;
             continue;
         }
 
-        // Zig-like Signed Integers
-        if (strncmp(f, "i8", 2) == 0) {
-            format_i64(w, (i8)va_arg(args, int));
-            f += 2;
-        } else if (strncmp(f, "i16", 3) == 0) {
-            format_i64(w, (i16)va_arg(args, int));
-            f += 3;
-        } else if (strncmp(f, "i32", 3) == 0) {
-            format_i64(w, va_arg(args, i32));
-            f += 3;
-        } else if (strncmp(f, "i64", 3) == 0) {
-            format_i64(w, va_arg(args, i64));
-            f += 3;
-        }
-        // Zig-like Unsigned Integers
-        else if (strncmp(f, "u8", 2) == 0) {
-            format_u64(w, (u8)va_arg(args, unsigned int));
-            f += 2;
-        } else if (strncmp(f, "u16", 3) == 0) {
-            format_u64(w, (u16)va_arg(args, unsigned int));
-            f += 3;
-        } else if (strncmp(f, "u32", 3) == 0) {
-            format_u64(w, va_arg(args, u32));
-            f += 3;
-        } else if (strncmp(f, "u64", 3) == 0) {
-            format_u64(w, va_arg(args, u64));
-            f += 3;
-        }
-        // Size and Pointer Offsets
-        else if (strncmp(f, "usz", 3) == 0) {
-            format_u64(w, va_arg(args, usize));
-            f += 3;
-        } else if (strncmp(f, "ssz", 3) == 0) {
-            format_i64(w, va_arg(args, ssize));
-            f += 3;
-        }
-        // Strings
-        else if (strncmp(f, "sz", 2) == 0) {
-            const char* p = va_arg(args, const char*);
-            if (!p) {
-                zmm_write_block(w, "(null)", 6);
-            } else {
-                zmm_write_block(w, p, strlen(p));
+        // --- NEW: Simple Precision Parser ---
+        // Allows for formats like "%.2f" or "%.4f"
+        int precision = 6;  // default precision
+        if (*f == '.') {
+            f++;
+            precision = 0;
+            while (*f >= '0' && *f <= '9') {
+                precision = precision * 10 + (*f - '0');
+                f++;
             }
-            f += 2;
-        } else if (strncmp(f, "s", 1) == 0) {
-            // Read the struct directly off the vararg list
-            SliceCU8 slice = va_arg(args, SliceCU8);
+        }
 
-            if (!slice.ptr) {
-                zmm_write_block(w, "(null)", 6);
-            } else {
-                zmm_write_block(w, (const char*)slice.ptr, slice.len);
+        // O(1) jump table instead of expensive strncmp chaining
+        switch (*f) {
+            case 'i':
+                if (f[1] == '3' && f[2] == '2') {
+                    format_i64(w, va_arg(args, i32));
+                    f += 3;
+                } else if (f[1] == '6' && f[2] == '4') {
+                    format_i64(w, va_arg(args, i64));
+                    f += 3;
+                } else if (f[1] == '1' && f[2] == '6') {
+                    format_i64(w, (i16)va_arg(args, int));
+                    f += 3;
+                } else if (f[1] == '8') {
+                    format_i64(w, (i8)va_arg(args, int));
+                    f += 2;
+                } else {
+                    zmm_write_block(w, "%i", 2);
+                    f++;
+                }
+                break;
+            case 'u':
+                if (f[1] == 's' && f[2] == 'z') {
+                    format_u64(w, va_arg(args, usize));
+                    f += 3;
+                } else if (f[1] == '3' && f[2] == '2') {
+                    format_u64(w, va_arg(args, u32));
+                    f += 3;
+                } else if (f[1] == '6' && f[2] == '4') {
+                    format_u64(w, va_arg(args, u64));
+                    f += 3;
+                } else if (f[1] == '1' && f[2] == '6') {
+                    format_u64(w, (u16)va_arg(args, unsigned int));
+                    f += 3;
+                } else if (f[1] == '8') {
+                    format_u64(w, (u8)va_arg(args, unsigned int));
+                    f += 2;
+                } else {
+                    zmm_write_block(w, "%u", 2);
+                    f++;
+                }
+                break;
+            case 's':
+                if (f[1] == 'z') {
+                    const char* p = va_arg(args, const char*);
+                    if (!p)
+                        zmm_write_block(w, "(null)", 6);
+                    else
+                        zmm_write_block(w, p, strlen(p));
+                    f += 2;
+                } else if (f[1] == 's' && f[2] == 'z') {
+                    format_i64(w, va_arg(args, ssize));
+                    f += 3;
+                } else {
+                    SliceCU8 slice = va_arg(args, SliceCU8);
+                    if (!slice.ptr)
+                        zmm_write_block(w, "(null)", 6);
+                    else
+                        zmm_write_block(w, (const char*)slice.ptr, slice.len);
+                    f += 1;
+                }
+                break;
+            case 'c': {
+                char c = (char)va_arg(args, int);
+                zmm_write_block(w, &c, 1);
+                f++;
+                break;
             }
-            f += 1;
-        }
-        // Basic Printf Specifiers
-        else if (strncmp(f, "f", 1) == 0) {
-            format_f64(w, va_arg(args, double));
-            f += 1;
-        } else if (strncmp(f, "c", 1) == 0) {
-            char c = (char)va_arg(args, int);
-            zmm_write_block(w, &c, 1);
-            f += 1;
-        } else if (strncmp(f, "d", 1) == 0) {
-            format_i64(w, va_arg(args, int));
-            f += 1;
-        } else if (strncmp(f, "x", 1) == 0) {
-            format_hex(w, va_arg(args, unsigned int));
-            f += 1;
-        } else if (strncmp(f, "p", 1) == 0) {
-            void* ptr = va_arg(args, void*);
-            zmm_write_block(w, "0x", 2);
-            format_hex(w, (u64)(uintptr_t)ptr);
-            f += 1;
-        } else if (strncmp(f, "b", 1) == 0) {
-            bool b = (bool)va_arg(args, int);
-
-            if (b) {
-                zmm_write_block(w, "true", 4);
-            } else {
-                zmm_write_block(w, "false", 5);
+            case 'd':
+                format_i64(w, va_arg(args, int));
+                f++;
+                break;
+            case 'x':
+                format_hex(w, va_arg(args, unsigned int));
+                f++;
+                break;
+            case 'p': {
+                void* ptr = va_arg(args, void*);
+                zmm_write_block(w, "0x", 2);
+                format_hex(w, (u64)(uintptr_t)ptr);
+                f++;
+                break;
             }
-            f += 1;
-        } else {
-            zmm_write_block(w, "%", 1);
-            zmm_write_block(w, f, 1);
-            f += 1;
+            case 'b': {
+                bool b = (bool)va_arg(args, int);
+                if (b)
+                    zmm_write_block(w, "true", 4);
+                else
+                    zmm_write_block(w, "false", 5);
+                f++;
+                break;
+            }
+            case 'f':
+                format_f64(w, va_arg(args, double), precision);
+                f++;
+                break;
+            default:
+                zmm_write_block(w, "%", 1);
+                zmm_write_block(w, f, 1);
+                f++;
+                break;
         }
     }
 
-    // FINALIZATION
-
-    // Flush any pending data in the stack buffer to stdout
     if (w->stream && w->flush_len > 0) {
         fwrite(w->flush_buf, 1, w->flush_len, w->stream);
         w->flush_len = 0;
     }
 
-    // Safely apply null-terminator ONLY for memory buffers
     if (!w->stream && !w->is_tl && w->buf && w->size > 0) {
         usize null_pos = w->written < w->size ? w->written : w->size - 1;
         w->buf[null_pos] = '\0';
@@ -312,10 +345,6 @@ static usize zmm_vformat(ZmmWriter* w, const char* format, va_list args) {
 
     return w->written;
 }
-
-// -----------------------------------------------------------------------------
-// Public API
-// -----------------------------------------------------------------------------
 
 usize zmm_snprintf(char* str, usize size, const char* format, ...) {
     ZmmWriter w = {
@@ -361,21 +390,14 @@ usize zmm_lprintf(const char* format, ...) {
     return ret;
 }
 
-// Safely emit the thread's accumulated logs and reset the accumulator
 void zmm_lemit(void) {
     if (tl_len == 0) return;
 
-    // Choose the active buffer (heap if it exceeded 4096, static otherwise)
-    const char* data = tl_dyn_buf ? tl_dyn_buf : tl_static_buf;
-
-    // Write thread-safely
     pthread_mutex_lock(&lemit_mutex);
-    fwrite(data, 1, tl_len, stdout);
-    fflush(stdout);  // Guarantee terminal output
+    // Write directly from the single active pointer
+    fwrite(tl_active_buf, 1, tl_len, stdout);
+    fflush(stdout);
     pthread_mutex_unlock(&lemit_mutex);
 
-    // Reset length. Note: We keep `tl_dyn_buf` (if allocated) alive so that
-    // subsequent large logs on this thread do not have to pay the malloc
-    // penalty again.
     tl_len = 0;
 }

@@ -172,31 +172,31 @@ i32 zmm_args_init(Argv* args, int argc, char** argv) {
         return -1;
     }
 
-    args->ptr = (SliceCU8*)malloc((usize)argc * sizeof(SliceCU8));
-    if (!args->ptr) return -1;
+    args->args = (SliceCU8*)malloc((usize)argc * sizeof(SliceCU8));
+    if (!args->args) return -1;
 
-    args->len = (usize)argc;
+    args->num_args = (usize)argc;
     for (int i = 0; i < argc; i++) {
-        args->ptr[i].ptr = (const u8*)argv[i];
-        args->ptr[i].len = argv[i] ? strlen(argv[i]) : 0;
+        args->args[i].ptr = (const u8*)argv[i];
+        args->args[i].len = argv[i] ? strlen(argv[i]) : 0;
     }
 
     return 0;
 }
 
 void zmm_args_free(Argv* args) {
-    if (args && args->ptr) {
-        free(args->ptr);
-        args->ptr = NULL;
-        args->len = 0;
+    if (args && args->args) {
+        free(args->args);
+        args->args = NULL;
+        args->num_args = 0;
     }
 }
 
 bool zmm_args_contains(const Argv* args, SliceCU8 flag) {
-    if (!args || !args->ptr) return false;
+    if (!args || !args->args) return false;
 
-    for (usize i = 0; i < args->len; i++) {
-        if (slice_eq(args->ptr[i], flag)) {
+    for (usize i = 0; i < args->num_args; i++) {
+        if (slice_eq(args->args[i], flag)) {
             return true;
         }
     }
@@ -205,10 +205,10 @@ bool zmm_args_contains(const Argv* args, SliceCU8 flag) {
 }
 
 SliceCU8 zmm_args_get_value(const Argv* args, SliceCU8 key) {
-    if (!args || !args->ptr) return NullSliceCU8;
+    if (!args || !args->args) return NullSliceCU8;
 
-    for (usize i = 0; i < args->len; i++) {
-        SliceCU8 arg = args->ptr[i];
+    for (usize i = 0; i < args->num_args; i++) {
+        SliceCU8 arg = args->args[i];
 
         if (arg.len >= key.len &&
             (key.len == 0 || memcmp(arg.ptr, key.ptr, key.len) == 0)) {
@@ -221,12 +221,12 @@ SliceCU8 zmm_args_get_value(const Argv* args, SliceCU8 key) {
 }
 
 SliceCU8 zmm_args_get_subsequent(const Argv* args, SliceCU8 key) {
-    if (!args || !args->ptr) return NullSliceCU8;
+    if (!args || !args->args) return NullSliceCU8;
 
-    for (usize i = 0; i < args->len; i++) {
-        if (slice_eq(args->ptr[i], key)) {
-            if (i + 1 < args->len) {
-                return args->ptr[i + 1];
+    for (usize i = 0; i < args->num_args; i++) {
+        if (slice_eq(args->args[i], key)) {
+            if (i + 1 < args->num_args) {
+                return args->args[i + 1];
             } else {
                 return NullSliceCU8;
             }

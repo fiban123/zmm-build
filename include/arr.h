@@ -1,8 +1,14 @@
 #pragma once
 
 /**
+ * This exists purely to explicitly denote what is a dynamic array
+ * and what is a regular pointer.
+ */
+
+/**
  * Declares a dynamic array of type T.
- * Uses stb_ds.h under the hood.
+ * 
+ * [Note] Uses stb_ds.h under the hood.
  */
 #define arr(T) T*
 
@@ -13,7 +19,8 @@
 
 /**
  * Declares a string hash map with values of type T.
- * Uses stb_ds.h under the hood.
+ * 
+ * [Note] Uses stb_ds.h under the hood.
  */
 #define stringhm(T) T*
 

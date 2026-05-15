@@ -131,10 +131,10 @@ int main(int argc, char** argv) {
     zmm_arena_init(&arena);
 
     CompileCommands cc;
-    zmm_cc_parse(&cc, &arena, strlit("compile_commands.json"));
+    zmm_cc_init_parse(&cc, &arena, strlit("compile_commands.json"));
 
     cc.current_directory = "./foo";
-    zmm_cc_append(&cc, &arena, strlit("hello.c"), cmd.flat, cmd.num_args);
+    zmm_cc_append(&cc, strlit("hello.c"), cmd.flat, cmd.num_args);
 
     zmm_cc_write(&cc, strlit("new_cc.json"));
 
@@ -208,7 +208,8 @@ int main(int argc, char** argv) {
                strlit("build/test2.out"),  //
                NULL, 0);
 
-    zmm_bg_build(&bg, strlit("build/test2.out"), builder);
+    zmm_bg_build(&bg, slicearr(SliceCU8, strlit("build/test2.out")), 1,
+                 builder);
 
     zmm_bg_free(&bg);
 

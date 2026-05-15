@@ -1,5 +1,5 @@
 CC      := clang
-CFLAGS  := -std=c23 -Wall -Wextra -fPIC -Iinclude -Iextern
+CFLAGS  := -std=gnu23 -Wall -Wextra -fPIC -Iinclude -Iextern
 LDFLAGS := 
 SO_LIBS := -lpthread -lcpu_features
 EXE_LIBS := -lzmm -lcpu_features

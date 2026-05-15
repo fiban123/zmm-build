@@ -281,9 +281,9 @@ i32 zmm_fs_change_cwd(SliceCU8 path) {
 
     if (chdir(path_nul) == 0) {
         free(path_nul);
-        return 0;  // Success
+        return 0;
     } else {
         free(path_nul);
-        return -1;  // Failure
+        return -1;
     }
 }
