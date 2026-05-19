@@ -315,7 +315,7 @@ The full documentation for libzmm API, and zmm CLI are in [DOCS.md](DOCS.md)
 
 ## License
 
-The core **zmm** build system library and CLI are licensed under the [GNU GPLv3 license](LICENSE).
+The core **zmm** build system library and CLI are licensed under the [Apache License 2.0](LICENSE).
 
 However, all files inside the `templates/` directory are dedicated to the public domain under [The Unlicense](templates/LICENSE). You are free to copy, modify, publish, use, compile, sell, or distribute them in any form, commercial or non-commercial, without any attribution or restrictions.
 
