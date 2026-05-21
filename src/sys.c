@@ -183,6 +183,7 @@ static char* build_win32_cmdline(char* const* argv, usize num_args) {
 }
 
 ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
+    zmm_argv_print(argv, num_args);
     ExecResult res = {.status = {.type = TERM_ERROR, .code = -1},
                       .output = {0}};
 
