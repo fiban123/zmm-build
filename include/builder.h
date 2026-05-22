@@ -49,8 +49,9 @@ struct NodeMap;
  */
 typedef struct {
     arr(struct Node) nodes;  // stb_ds dynamic array
-    void* node_map;          // stb_ds string hash map
+    void* node_map;          // khash string hash map
     ArenaAlloc* arena;
+    u64 num_builds;
 } BuildGraph;
 
 /**

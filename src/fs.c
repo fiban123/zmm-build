@@ -26,10 +26,12 @@
 #ifdef _WIN32
 #include <direct.h>
 #define chdir _chdir
+#include <io.h>
 #endif
 #include <unistd.h>
 
 #include "path.h"
+#include "print.h"
 #include "slice.h"
 
 static char* path_join(const char* dir, const char* file) {
@@ -226,6 +228,9 @@ bool zmm_fs_file_exists(SliceCU8 path) {
 }
 
 i32 zmm_fs_delete_file(SliceCU8 path) {
+    zmm_lprintf("Deleting file %s\n", path);
+    zmm_lemit();
+
     char* cstr = slice_to_cstr(path);
     if (!cstr) return -1;
 
@@ -239,6 +244,9 @@ i32 zmm_fs_delete_file(SliceCU8 path) {
 }
 
 i32 zmm_fs_delete_dir(SliceCU8 path) {
+    zmm_lprintf("Deleting directory %s\n", path);
+    zmm_lemit();
+
     char* cstr = slice_to_cstr(path);
     if (!cstr) return -1;
 
@@ -274,12 +282,199 @@ static i32 delete_tree_cstr(const char* path) {
 }
 
 i32 zmm_fs_delete_tree(SliceCU8 path) {
+    zmm_lprintf("Deleting tree %s\n", path);
+    zmm_lemit();
+
     char* cstr = slice_to_cstr(path);
     if (!cstr) return -1;
 
     i32 res = delete_tree_cstr(cstr);
 
     free(cstr);
+    return res;
+}
+
+static i32 copy_file_cstr(const char* src, const char* dst) {
+    FILE* in = fopen(src, "rb");
+    if (!in) return -1;
+
+    FILE* out = fopen(dst, "wb");
+    if (!out) {
+        fclose(in);
+        return -1;
+    }
+
+    char buf[BUFSIZ];
+    size_t n;
+    i32 res = 0;
+
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            res = -1;  // Write error
+            break;
+        }
+    }
+
+    fclose(in);
+    fclose(out);
+
+    // If the copy was successful, copy the metadata (permissions)
+    if (res == 0) {
+        struct stat st;
+        if (stat(src, &st) == 0) {
+#if defined(_WIN32)
+            // Windows permissions are simpler and executability depends on the
+            // .exe extension, but we copy the read/write mode anyway.
+            _chmod(dst, st.st_mode);
+#else
+            // On POSIX (Linux/macOS), this ensures +x (executable) and other
+            // permissions are correctly applied.
+            // 07777 grabs the setuid/setgid/sticky bits + standard rwx bits.
+            chmod(dst, st.st_mode & 07777);
+#endif
+        } else {
+            // If stat fails, we still copied the data, but metadata failed
+            res = -1;
+        }
+    }
+
+    return res;
+}
+
+static i32 copy_dir_cstr(const char* src, const char* dst) {
+    // Ensure destination directory exists
+    SliceCU8 dst_slice = {.ptr = (const u8*)dst, .len = strlen(dst)};
+    zmm_fs_create_dir_path(dst_slice);
+
+    DIR* dir = opendir(src);
+    if (!dir) return -1;
+
+    struct dirent* entry;
+    i32 res = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+
+        char* src_path = path_join(src, entry->d_name);
+        char* dst_path = path_join(dst, entry->d_name);
+
+        struct stat st;
+        // Shallow copy: only copy regular files
+        if (stat(src_path, &st) == 0 && S_ISREG(st.st_mode)) {
+            if (copy_file_cstr(src_path, dst_path) != 0) {
+                res = -1;
+            }
+        }
+
+        free(src_path);
+        free(dst_path);
+    }
+
+    closedir(dir);
+    return res;
+}
+
+static i32 copy_tree_cstr(const char* src, const char* dst) {
+    struct stat st;
+    if (stat(src, &st) != 0) return -1;
+
+    if (S_ISREG(st.st_mode)) {
+        return copy_file_cstr(src, dst);
+    } else if (S_ISDIR(st.st_mode)) {
+        // Ensure destination directory exists
+        SliceCU8 dst_slice = {.ptr = (const u8*)dst, .len = strlen(dst)};
+        zmm_fs_create_dir_path(dst_slice);
+
+        DIR* dir = opendir(src);
+        if (!dir) return -1;
+
+        struct dirent* entry;
+        i32 res = 0;
+
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 ||
+                strcmp(entry->d_name, "..") == 0)
+                continue;
+
+            char* src_path = path_join(src, entry->d_name);
+            char* dst_path = path_join(dst, entry->d_name);
+
+            // Recurse into files and directories
+            if (copy_tree_cstr(src_path, dst_path) != 0) {
+                res = -1;
+            }
+
+            free(src_path);
+            free(dst_path);
+        }
+
+        closedir(dir);
+        return res;
+    }
+
+    return -1;  // Not a regular file or directory
+}
+
+// --- Public Slice API ---
+
+i32 zmm_fs_copy_file(SliceCU8 src, SliceCU8 dst) {
+    zmm_lprintf("Copying file %s to %s\n", src, dst);
+    zmm_lemit();
+
+    char* src_cstr = slice_to_cstr(src);
+    char* dst_cstr = slice_to_cstr(dst);
+
+    if (!src_cstr || !dst_cstr) {
+        free(src_cstr);
+        free(dst_cstr);
+        return -1;
+    }
+
+    i32 res = copy_file_cstr(src_cstr, dst_cstr);
+
+    free(src_cstr);
+    free(dst_cstr);
+    return res;
+}
+
+i32 zmm_fs_copy_dir(SliceCU8 src, SliceCU8 dst) {
+    zmm_lprintf("Copying directory %s to %s\n", src, dst);
+    zmm_lemit();
+
+    char* src_cstr = slice_to_cstr(src);
+    char* dst_cstr = slice_to_cstr(dst);
+
+    if (!src_cstr || !dst_cstr) {
+        free(src_cstr);
+        free(dst_cstr);
+        return -1;
+    }
+
+    i32 res = copy_dir_cstr(src_cstr, dst_cstr);
+
+    free(src_cstr);
+    free(dst_cstr);
+    return res;
+}
+
+i32 zmm_fs_copy_tree(SliceCU8 src, SliceCU8 dst) {
+    zmm_lprintf("Copying tree %s to %s\n", src, dst);
+    zmm_lemit();
+
+    char* src_cstr = slice_to_cstr(src);
+    char* dst_cstr = slice_to_cstr(dst);
+
+    if (!src_cstr || !dst_cstr) {
+        free(src_cstr);
+        free(dst_cstr);
+        return -1;
+    }
+
+    i32 res = copy_tree_cstr(src_cstr, dst_cstr);
+
+    free(src_cstr);
+    free(dst_cstr);
     return res;
 }
 

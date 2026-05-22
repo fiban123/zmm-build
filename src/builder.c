@@ -169,6 +169,7 @@ void zmm_bg_init(BuildGraph* g, ArenaAlloc* arena) {
     g->nodes = arrinit;
     g->node_map = kh_init(node_map);
     g->arena = arena;
+    g->num_builds = 0;
 }
 
 void zmm_bg_free(BuildGraph* g) {
@@ -346,6 +347,8 @@ static void* worker_fn(void* arg) {
                          node->deps, arrlenu(node->deps));
 
             if (dirty) {
+                __atomic_fetch_add(&ctx->graph->num_builds, 1,
+                                   __ATOMIC_SEQ_CST);
                 int res = ctx->builder(node->sources, arrlenu(node->sources),
                                        node->output, ctx->thread_idx);
                 if (res != 0) {
