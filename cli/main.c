@@ -274,7 +274,7 @@ static u64 get_us(void) {
 }
 
 int main(int argc, char** argv) {
-    FILE* cfg_file = fopen(".zmm", "r");
+    FILE* cfg_file = fopen(".zmm", "rb");
     if (!cfg_file) {
         zmm_printf("No config file (.zmm) was found :(\n");
         return 1;
@@ -350,8 +350,8 @@ int main(int argc, char** argv) {
                          sizeof(cmd_ptrbuf));
 
 #ifdef _WIN32
-        zmm_argv_appendz(&cmd, slicearr(SliceCU8, strlit("cmd"), strlit("/S"),
-                                        strlit("/C"), NullSliceCU8));
+        zmm_argv_appendz(&cmd, slicearr(SliceCU8, strlit("cmd"), strlit("/c"),
+                                        NullSliceCU8));
 #else
         zmm_argv_appendz(
             &cmd, slicearr(SliceCU8, strlit("sh"), strlit("-c"), NullSliceCU8));

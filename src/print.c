@@ -19,7 +19,7 @@
 #define _POSIX_C_SOURCE 200112L
 #endif
 
-#include "print.h"  // Assuming your types are here
+#include "print.h"
 
 #include <pthread.h>
 #include <stdarg.h>
@@ -52,7 +52,7 @@ typedef struct {
 #define TL_INITIAL_CAP 4096
 
 static _Thread_local char tl_static_buf[TL_INITIAL_CAP];
-static _Thread_local char* tl_active_buf = NULL;  // Changed from tl_static_buf
+static _Thread_local char* tl_active_buf = NULL;
 static _Thread_local usize tl_cap = TL_INITIAL_CAP;
 static _Thread_local usize tl_len = 0;
 

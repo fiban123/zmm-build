@@ -103,6 +103,9 @@ install: fast
 ifeq ($(OS),Windows_NT)
 	@echo " -> Installing Shared Library to $(BIN_DIR) (Windows PATH requirement)"
 	@install -m 755 $(LIB) $(BIN_DIR)/
+
+	@echo " -> Installing Shared Library to $(LIB_DIR)"
+	@install -m 755 $(LIB) $(LIB_DIR)/
 else
 	@echo " -> Installing Shared Library to $(LIB_DIR)"
 	@install -m 644 $(LIB) $(LIB_DIR)/
