@@ -22,22 +22,10 @@
 #include "arr.h"
 #include "export.h"
 #include "num.h"
-#include "slice.h"
+#include "str.h"
 
-/**
- * Specifies the depth of a filesystem search.
- */
-typedef enum : u8 {
-    FD_SHALLOW,   // Only search the specified directories.
-    FD_RECURSIVE  // Search specified directories and all subdirectories.
-} FindDepth;
+typedef enum : u8 { FD_SHALLOW, FD_RECURSIVE } FindDepth;
 
-/**
- * Specifies the kind of filesystem entry to find.
- *
- * NOTE: more filsystem entry types such as symlinks exist and may be added in a
- * future version.
- */
 typedef enum : u8 {
     FK_FILE = 1,  // Find files.
     FK_DIRECTORY  // Find directories.
@@ -49,7 +37,7 @@ typedef enum : u8 {
 typedef struct {
     FindDepth depth;
     const FindKind* kinds;  // Null-terminated array of FindKind.
-    const SliceCU8* exts;   // Nullslice-terminated array of extensions.
+    StringView ext;         // Nullslice-terminated array of extensions.
     bool ignore_hidden;     // If true, ignore files starting with a dot.
 } FindOpts;
 

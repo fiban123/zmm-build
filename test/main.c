@@ -148,14 +148,12 @@ int main(int argc, char** argv) {
     zmm_arena_init(&arena);
 
     CompileCommands cc;
-    zmm_cc_init_parse(&cc, &arena, strlit("compile_commands.json"));
+    zmm_cc_init(&cc, strlit("new_cc.json"));
 
-    cc.current_directory = "./foo";
-    zmm_cc_append(&cc, strlit("hello.c"), cmd.flat, cmd.num_args);
+    zmm_cc_append(&cc, strlit("./foo"), strlit("hello.c"), cmd.flat,
+                  cmd.num_args);
 
-    zmm_cc_write(&cc, strlit("new_cc.json"));
-
-    zmm_cc_free(&cc);
+    zmm_cc_finish(&cc);
 
     zmm_argv_free(&cmd);
 

@@ -61,6 +61,7 @@ SliceCU8 dep_dir = strlit("build/.dep/");
 SliceCU8 src_dir = strlit("src/");
 
 CompileCommands ccmds;
+SliceCU8 cwd;
 ArenaAlloc arena;
 
 int builder(const SliceCU8* sources, usize num_sources, SliceCU8 output,
@@ -129,7 +130,7 @@ int builder(const SliceCU8* sources, usize num_sources, SliceCU8 output,
     zmm_argv_append(&cmd, output);
 
     if (is_obj && num_sources == 1) {
-        zmm_cc_append(&ccmds, sources[0], cmd.flat, cmd.num_args);
+        zmm_cc_append(&ccmds, cwd, sources[0], cmd.flat, cmd.num_args);
     }
 
     ChildTerm status = zmm_sys_exec_print(cmd.argv, cmd.num_args);
@@ -253,7 +254,8 @@ int main(int argc, char** argv) {
     zmm_tg_add_dep_nc(&cli_tg, &so_out, 1);
     zmm_tg_add_dep_nc(&test_tg, &so_out, 1);
 
-    zmm_cc_init_parse(&ccmds, &arena, ccmds_file);
+    zmm_cc_init(&ccmds, ccmds_file);
+    cwd = slice_cast(SliceCU8, zmm_fs_abs_cwd());
 
     SliceCU8 to_build[] = {so_out, test_out, cli_out};
 
@@ -265,13 +267,14 @@ int main(int argc, char** argv) {
 
     zmm_printf("=> Build finished in %.2fms\n", (end - start) / 1000.);
 
-    zmm_cc_write(&ccmds, ccmds_file);
+    zmm_cc_finish(&ccmds);
+    free((void*)cwd.ptr);
 
     zmm_arena_free(&arena);
     slicearr_free(lib_srcs);
     zmm_args_free(&args);
     zmm_bg_free(&bg);
-    zmm_cc_free(&ccmds);
+
 
     return exit_code;
 }

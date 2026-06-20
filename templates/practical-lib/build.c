@@ -156,6 +156,7 @@ ArgvBuilder ldflags;
 ArgvBuilder aflags;
 
 CompileCommands ccmds;
+SliceCU8 cwd;
 ArenaAlloc arena;
 
 int builder(const SliceCU8* sources, usize num_sources, SliceCU8 output,
@@ -239,7 +240,7 @@ int builder(const SliceCU8* sources, usize num_sources, SliceCU8 output,
         zmm_argv_append(&cmd, output);
 
         if (is_comp) {
-            zmm_cc_append(&ccmds, sources[0], cmd.flat, cmd.num_args);
+            zmm_cc_append(&ccmds, cwd, sources[0], cmd.flat, cmd.num_args);
         }
     }
 
@@ -441,7 +442,8 @@ int main(int argc, char** argv) {
         build_test_exes = false;
     }
 
-    zmm_cc_init_parse(&ccmds, &arena, CCMDS_FILE);
+    zmm_cc_init(&ccmds, CCMDS_FILE);
+    cwd = slice_cast(SliceCU8, zmm_fs_abs_cwd());
 
     arr(SliceCU8) to_build = arrinit;
 
@@ -466,13 +468,14 @@ int main(int argc, char** argv) {
 
     zmm_printf("=> Build finished in %.2fms\n", (end - start) / 1000.f);
 
-    zmm_cc_write(&ccmds, CCMDS_FILE);
+    zmm_cc_finish(&ccmds);
+    free((void*)cwd.ptr);
 
     zmm_arena_free(&arena);
     slicearr_free(lib_srcs);
     zmm_args_free(&args);
     zmm_bg_free(&bg);
-    zmm_cc_free(&ccmds);
+
 
     return exit_code;
 }

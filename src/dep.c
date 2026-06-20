@@ -23,13 +23,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "path.h"
-#include "slice.h"
+#include "str.h"
 
-i32 zmm_dep_parse(arr(SliceU8) * deps, SliceCU8 path) {
+i32 zmm_dep_parse(arr(String) * deps, StringView path) {
     if (!deps) return -1;
 
-    char* path_nul = slice_to_cstr(path);
+    char* path_nul = zmm_str_vtoc(path);
     if (!path_nul) return -1;
 
     FILE* f = fopen(path_nul, "rb");
@@ -62,17 +61,17 @@ i32 zmm_dep_parse(arr(SliceU8) * deps, SliceCU8 path) {
         token_buf[token_len++] = (c);                    \
     } while (0)
 
-#define COMMIT_TOKEN()                                              \
-    do {                                                            \
-        if (token_len > 0) {                                        \
-            if (seen_colon) {                                       \
-                u8* new_str = (u8*)malloc(token_len);               \
-                memcpy(new_str, token_buf, token_len);              \
-                SliceU8 slice = {.ptr = new_str, .len = token_len}; \
-                arrput(*deps, slice);                               \
-            }                                                       \
-            token_len = 0;                                          \
-        }                                                           \
+#define COMMIT_TOKEN()                                             \
+    do {                                                           \
+        if (token_len > 0) {                                       \
+            if (seen_colon) {                                      \
+                u8* new_str = (u8*)malloc(token_len);              \
+                memcpy(new_str, token_buf, token_len);             \
+                String slice = {.ptr = new_str, .len = token_len}; \
+                arrput(*deps, slice);                              \
+            }                                                      \
+            token_len = 0;                                         \
+        }                                                          \
     } while (0)
 
     while ((bytes_read = fread(chunk, 1, sizeof(chunk), f)) > 0) {

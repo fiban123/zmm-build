@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -26,51 +26,69 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "arena.h"
 #include "arr.h"
 #include "cpu.h"
-#include "slice.h"
+#include "str.h"
+
+// --- Constants & Types ---
+
+#define NODE_FLAG_PHONY (1 << 0)
+#define NODE_FLAG_ALWAYS_DIRTY (1 << 1)
+#define NODE_FLAG_IS_TARGET (1 << 2)
 
 typedef u64 NodeId;
 
 // --- khash Map Implementation ---
 
-// FNV-1 hash implementation for length-based string slices
-static inline khint_t hash_slicecu8(SliceCU8 s) {
+// FNV-1 hash implementation for StringView
+static inline khint_t hash_strview(StringView s) {
     khint_t h = 2166136261U;
     for (usize i = 0; i < s.len; ++i) {
         h *= 16777619U;
-        h ^= s.ptr[i];
+        h ^= (u8)s.ptr[i];
     }
     return h;
 }
 
-// Equality check for length-based string slices
-static inline int eq_slicecu8(SliceCU8 a, SliceCU8 b) {
-    if (a.len != b.len) return 0;
-    return memcmp(a.ptr, b.ptr, a.len) == 0;
+static inline int eq_strview(StringView a, StringView b) {
+    return zmm_str_eq(a, b);
 }
 
-// Instantiate khash map: Key=SliceCU8, Value=NodeId
-KHASH_INIT(node_map, SliceCU8, NodeId, 1, hash_slicecu8, eq_slicecu8)
+KHASH_INIT(node_map, StringView, NodeId, 1, hash_strview, eq_strview)
+
+// --- Graph Data Structures ---
 
 typedef struct Node {
-    SliceCU8 output;
+    StringView output;
 
-    // stb_ds dynamic arrays
-    arr(SliceCU8) sources;
-    arr(SliceCU8) deps;
+    arr(StringView) sources;
+    arr(StringView) deps;
 
-    // Edges
-    NodeId* dependents;  // Nodes that wait for us
-    NodeId* waits_on;  // Nodes we wait for (used for target subgraph traversal)
+    arr(NodeId) dependents;
+    arr(NodeId) waits_on;
 
-    bool is_target;
+    BuilderFn builder;
+    u8 flags;  // Merged boolean states
 
-    // Execution state
+    // Planner / Execution state
     bool is_in_subgraph;
+    bool eval_visited;
+    bool is_dirty;
     _Atomic u32 pending_deps;
 } Node;
+
+struct BuildGraph {
+    Node* nodes;
+    void* node_map;          // khash_t(node_map)*
+    char** internal_allocs;  // Replaces the arena: tracks duplicated strings
+
+    _Atomic u32 remaining_nodes;
+};
+
+struct TargetBuilder {
+    BuildGraph* g;
+    NodeId id;
+};
 
 // --- Task Queue Implementation ---
 
@@ -130,46 +148,54 @@ static bool queue_pop(TaskQueue* q, NodeId* out_node) {
 static void queue_shutdown(TaskQueue* q) {
     pthread_mutex_lock(&q->lock);
     q->shutdown = true;
-    pthread_cond_broadcast(&q->not_empty);  // Wake up all threads to exit
+    pthread_cond_broadcast(&q->not_empty);
     pthread_mutex_unlock(&q->lock);
 }
 
-// --- String Allocation Utilities ---
+// --- Internal Memory & String Utilities ---
+
+// Hidden "Arena" mechanism that guarantees all strings are copied
+static StringView bg_dupe_str(BuildGraph* g, StringView v) {
+    char* ptr = (char*)malloc(v.len + 1);
+    memcpy(ptr, v.ptr, v.len);
+    ptr[v.len] = '\0';
+    arrpush(g->internal_allocs, ptr);  // Track for cleanup
+    return (StringView){ptr, v.len};
+}
 
 #define MAX_TEMP_PATH 4096
 static _Thread_local char tl_path_buf[MAX_TEMP_PATH];
 
-static inline char* slice_to_temp_cstr(SliceCU8 slice, bool* out_is_heap) {
+static inline char* strview_to_temp_cstr(StringView view, bool* out_is_heap) {
     *out_is_heap = false;
     char* cstr = tl_path_buf;
-    if (slice.len < MAX_TEMP_PATH) {
-        memcpy(cstr, slice.ptr, slice.len);
-        cstr[slice.len] = '\0';
+    if (view.len < MAX_TEMP_PATH) {
+        memcpy(cstr, view.ptr, view.len);
+        cstr[view.len] = '\0';
     } else {
         *out_is_heap = true;
-        cstr = (char*)malloc(slice.len + 1);
-        memcpy(cstr, slice.ptr, slice.len);
-        cstr[slice.len] = '\0';
+        cstr = (char*)malloc(view.len + 1);
+        memcpy(cstr, view.ptr, view.len);
+        cstr[view.len] = '\0';
     }
     return cstr;
 }
 
-// Helper to conveniently stat a slice without leaking memory.
-static inline int stat_slice(SliceCU8 path, struct stat* out_stat) {
+static inline int stat_strview(StringView path, struct stat* out_stat) {
     bool is_heap;
-    char* cstr = slice_to_temp_cstr(path, &is_heap);
+    char* cstr = strview_to_temp_cstr(path, &is_heap);
     int res = stat(cstr, out_stat);
     if (is_heap) free(cstr);
     return res;
 }
 
-// --- Graph Utilities ---
+// --- Graph Initialization & Teardown ---
 
-void zmm_bg_init(BuildGraph* g, ArenaAlloc* arena) {
+void zmm_bg_init(BuildGraph* g) {
     g->nodes = arrinit;
     g->node_map = kh_init(node_map);
-    g->arena = arena;
-    g->num_builds = 0;
+    g->internal_allocs = arrinit;
+    atomic_init(&g->remaining_nodes, 0);
 }
 
 void zmm_bg_free(BuildGraph* g) {
@@ -186,9 +212,14 @@ void zmm_bg_free(BuildGraph* g) {
     if (g->node_map) {
         kh_destroy(node_map, (khash_t(node_map)*)g->node_map);
     }
+
+    for (usize i = 0; i < arrlenu(g->internal_allocs); ++i) {
+        free(g->internal_allocs[i]);
+    }
+    arrfree(g->internal_allocs);
 }
 
-static NodeId get_or_put_node(BuildGraph* g, SliceCU8 path) {
+static NodeId get_or_put_node(BuildGraph* g, StringView path) {
     khash_t(node_map)* h = (khash_t(node_map)*)g->node_map;
 
     khint_t k = kh_get(node_map, h, path);
@@ -196,20 +227,13 @@ static NodeId get_or_put_node(BuildGraph* g, SliceCU8 path) {
         return kh_val(h, k);
     }
 
-    // New node, so we need persistent memory for the map key.
-    // Allocate it in the arena. No null terminator needed for khash.
-    SliceCU8 perm_key;
-    perm_key.len = path.len;
-    perm_key.ptr = (const u8*)zmm_arena_dupe(g->arena, path.ptr, path.len);
+    StringView perm_key = bg_dupe_str(g, path);
 
     NodeId id = (NodeId)arrlenu(g->nodes);
     Node n = {0};
-
-    // Reuse the persistent arena slice for the node output
     n.output = perm_key;
     arrpush(g->nodes, n);
 
-    // Put in map
     int ret;
     k = kh_put(node_map, h, perm_key, &ret);
     kh_val(h, k) = id;
@@ -217,120 +241,257 @@ static NodeId get_or_put_node(BuildGraph* g, SliceCU8 path) {
     return id;
 }
 
-void zmm_bg_add(BuildGraph* g, SliceCU8 const* sources, usize num_sources,
-                SliceCU8 output, SliceCU8 const* deps, usize num_deps) {
-    NodeId out_id = get_or_put_node(g, output);
-    g->nodes[out_id].is_target = true;
+static void add_dependency_edge(BuildGraph* g, NodeId target_id,
+                                StringView dep_path) {
+    NodeId dep_id = get_or_put_node(g, dep_path);
+    arrpush(g->nodes[dep_id].dependents, target_id);
+    arrpush(g->nodes[target_id].waits_on, dep_id);
+}
 
-    // Duplicate memory for sources into arena
-    for (usize i = 0; i < num_sources; ++i) {
-        SliceCU8 duped;
-        duped.len = sources[i].len;
-        duped.ptr =
-            (const u8*)zmm_arena_dupe(g->arena, sources[i].ptr, sources[i].len);
-        arrpush(g->nodes[out_id].sources, duped);
-    }
+// --- Public Graph Addition API ---
 
-    // Duplicate memory for deps into arena
-    for (usize i = 0; i < num_deps; ++i) {
-        SliceCU8 duped;
-        duped.len = deps[i].len;
-        duped.ptr =
-            (const u8*)zmm_arena_dupe(g->arena, deps[i].ptr, deps[i].len);
-        arrpush(g->nodes[out_id].deps, duped);
-    }
+void zmm_bg_add(BuildGraph* g, const StringView* sources, usize num_sources,
+                StringView output, const StringView* deps, usize num_deps,
+                BuilderFn builder, bool always_dirty) {
+    TargetBuilder tg;
+    zmm_tg_init(&tg, g, output);
+    zmm_tg_set_builder(&tg, builder);
+    if (always_dirty) zmm_tg_set_always_dirty(&tg);
+    zmm_tg_add_src(&tg, sources, num_sources);
+    zmm_tg_add_dep(&tg, deps, num_deps);
+}
 
-    SliceCU8 const* lists[2] = {sources, deps};
-    usize counts[2] = {num_sources, num_deps};
+void zmm_bg_add_phony(BuildGraph* g, const StringView* sources,
+                      usize num_sources, StringView output,
+                      const StringView* deps, usize num_deps, BuilderFn builder,
+                      bool always_dirty) {
+    zmm_bg_add(g, sources, num_sources, output, deps, num_deps, builder,
+               always_dirty);
+    g->nodes[get_or_put_node(g, output)].flags |= NODE_FLAG_PHONY;
+}
 
-    for (int list_idx = 0; list_idx < 2; ++list_idx) {
-        for (usize i = 0; i < counts[list_idx]; ++i) {
-            NodeId dep_id = get_or_put_node(g, lists[list_idx][i]);
-            arrpush(g->nodes[dep_id].dependents, out_id);
-            arrpush(g->nodes[out_id].waits_on, dep_id);
-        }
+// --- TargetBuilder API ---
+
+void zmm_tg_init(TargetBuilder* tg, BuildGraph* g, StringView output) {
+    NodeId id = get_or_put_node(g, output);
+    g->nodes[id].flags |= NODE_FLAG_IS_TARGET;
+    tg->g = g;
+    tg->id = id;
+}
+
+void zmm_tg_init_phony(TargetBuilder* tg, BuildGraph* g, StringView output) {
+    zmm_tg_init(tg, g, output);
+    g->nodes[tg->id].flags |= NODE_FLAG_PHONY;
+}
+
+void zmm_tg_set_builder(TargetBuilder* tg, BuilderFn builder) {
+    tg->g->nodes[tg->id].builder = builder;
+}
+
+void zmm_tg_set_phony(TargetBuilder* tg) {
+    tg->g->nodes[tg->id].flags |= NODE_FLAG_PHONY;
+}
+
+void zmm_tg_set_always_dirty(TargetBuilder* tg) {
+    tg->g->nodes[tg->id].flags |= NODE_FLAG_ALWAYS_DIRTY;
+}
+
+void zmm_tg_add_src(TargetBuilder* tb, const StringView* sources, usize count) {
+    for (usize i = 0; i < count; ++i) {
+        StringView duped = bg_dupe_str(tb->g, sources[i]);
+        arrpush(tb->g->nodes[tb->id].sources, duped);
+        add_dependency_edge(tb->g, tb->id, sources[i]);
     }
 }
 
-// --- Concurrent Execution ---
+void zmm_tg_add_dep(TargetBuilder* tb, const StringView* deps, usize count) {
+    for (usize i = 0; i < count; ++i) {
+        StringView duped = bg_dupe_str(tb->g, deps[i]);
+        arrpush(tb->g->nodes[tb->id].deps, duped);
+        add_dependency_edge(tb->g, tb->id, deps[i]);
+    }
+}
 
-typedef struct {
-    BuildGraph* graph;
-    BuilderFn builder;
-    TaskQueue* queue;
-    _Atomic bool* has_error;
-    _Atomic u32* remaining_nodes;
-    pthread_mutex_t* done_lock;
-    pthread_cond_t* done_cond;
-    u32 thread_idx;
-} WorkerCtx;
+// --- Phase 1: Planning / Dirty Checking ---
 
-// returns true if b is newer than a
 static inline bool is_dirty_stat(const struct stat* a_stat,
                                  const struct stat* b_stat) {
     long a_sec = a_stat->st_mtime;
     long b_sec = b_stat->st_mtime;
 
 #ifdef _WIN32
-    // Windows/MinGW standard stat lacks nanosecond precision
     long a_nsec = 0;
     long b_nsec = 0;
 #elif defined(__APPLE__)
-    // macOS and BSD-based systems
     long a_nsec = a_stat->st_mtimespec.tv_nsec;
     long b_nsec = b_stat->st_mtimespec.tv_nsec;
 #else
     // Linux and standard POSIX systems
-    long a_nsec = a_stat->st_mtim.tv_nsec;
-    long b_nsec = b_stat->st_mtim.tv_nsec;
+    long a_nsec = a_stat->st_mtimensec;
+    long b_nsec = b_stat->st_mtimensec;
 #endif
 
     if (b_sec > a_sec) return true;
     if (a_sec == b_sec && b_nsec > a_nsec) return true;
-
     return false;
 }
 
-static bool is_dirty(SliceCU8 output, SliceCU8 const* inputs, usize num_inputs,
-                     SliceCU8* deps, usize n_deps) {
+// Recursively evaluate dirty state (Bottom-Up)
+static bool eval_node_dirty(BuildGraph* g, NodeId id) {
+    Node* n = &g->nodes[id];
+    if (n->eval_visited) return n->is_dirty;
+    n->eval_visited = true;
+
+    bool dirty = false;
+
+    // 1. Check Always Dirty
+    if (n->flags & NODE_FLAG_ALWAYS_DIRTY) {
+        dirty = true;
+    }
+
+    // 2. Evaluate all dependencies first
+    for (usize i = 0; i < arrlenu(n->waits_on); ++i) {
+        if (eval_node_dirty(g, n->waits_on[i])) {
+            dirty = true;  // Bubble up dirty state
+        }
+    }
+
+    if (dirty) {
+        n->is_dirty = true;
+        return true;
+    }
+
+    // 3. If it's a Phony target and dependencies were clean, it stays clean
+    if (n->flags & NODE_FLAG_PHONY) {
+        n->is_dirty = false;
+        return false;
+    }
+
+    // 4. Standard File Stat checks
     struct stat out_stat;
-    if (stat_slice(output, &out_stat) != 0)
-        return true;  // Output doesn't exist
-
-    for (usize i = 0; i < num_inputs; ++i) {
-        struct stat in_stat;
-        if (stat_slice(inputs[i], &in_stat) != 0) return true;
-        if (is_dirty_stat(&out_stat, &in_stat)) return true;
+    if (stat_strview(n->output, &out_stat) != 0) {
+        n->is_dirty = true;  // Output doesn't exist
+        return true;
     }
 
-    for (usize i = 0; i < n_deps; ++i) {
+    // Check Sources
+    for (usize i = 0; i < arrlenu(n->sources); ++i) {
         struct stat in_stat;
-        if (stat_slice(deps[i], &in_stat) != 0) return true;
-        if (is_dirty_stat(&out_stat, &in_stat)) return true;
+        if (stat_strview(n->sources[i], &in_stat) != 0 ||
+            is_dirty_stat(&out_stat, &in_stat)) {
+            n->is_dirty = true;
+            return true;
+        }
     }
 
+    // Check Deps
+    for (usize i = 0; i < arrlenu(n->deps); ++i) {
+        struct stat in_stat;
+        if (stat_strview(n->deps[i], &in_stat) != 0 ||
+            is_dirty_stat(&out_stat, &in_stat)) {
+            n->is_dirty = true;
+            return true;
+        }
+    }
+
+    n->is_dirty = false;
     return false;
 }
 
-// returns true if b is newer than a (a needs to be rebuilt)
-bool zmm_bg_is_dirty(SliceCU8 a_path, SliceCU8 b_path) {
-    struct stat a_stat, b_stat;
+static void plan_subgraph(BuildGraph* g, NodeId start_id) {
+    NodeId* stack = NULL;
+    arrpush(stack, start_id);
 
-    if (stat_slice(a_path, &a_stat) != 0) return true;
-    if (stat_slice(b_path, &b_stat) != 0) return true;
+    while (arrlen(stack) > 0) {
+        NodeId id = arrpop(stack);
+        Node* n = &g->nodes[id];
 
-    return is_dirty_stat(&a_stat, &b_stat);
+        if (n->is_in_subgraph) continue;
+        n->is_in_subgraph = true;
+
+        for (usize i = 0; i < arrlenu(n->waits_on); ++i) {
+            if (!g->nodes[n->waits_on[i]].is_in_subgraph) {
+                arrpush(stack, n->waits_on[i]);
+            }
+        }
+    }
+    arrfree(stack);
 }
+
+int zmm_bg_prepare(BuildGraph* g, const StringView* targets,
+                   usize num_targets) {
+    khash_t(node_map)* h = (khash_t(node_map)*)g->node_map;
+
+    // Reset state
+    for (usize i = 0; i < arrlenu(g->nodes); ++i) {
+        g->nodes[i].is_in_subgraph = false;
+        g->nodes[i].eval_visited = false;
+        g->nodes[i].is_dirty = false;
+        atomic_store(&g->nodes[i].pending_deps, 0);
+    }
+
+    // 1. Mark subgraph
+    for (usize i = 0; i < num_targets; ++i) {
+        khint_t k = kh_get(node_map, h, targets[i]);
+        if (k == kh_end(h)) return -1;  // Target not found
+        plan_subgraph(g, kh_val(h, k));
+    }
+
+    // 2. Evaluate dirty state bottom-up
+    for (usize i = 0; i < arrlenu(g->nodes); ++i) {
+        if (g->nodes[i].is_in_subgraph) {
+            eval_node_dirty(g, (NodeId)i);
+        }
+    }
+
+    // 3. Setup execution plan (Only tracking dirty nodes waiting on dirty
+    // dependencies)
+    u32 total_dirty = 0;
+    for (usize i = 0; i < arrlenu(g->nodes); ++i) {
+        Node* n = &g->nodes[i];
+        if (n->is_in_subgraph && n->is_dirty) {
+            total_dirty++;
+            u32 p_deps = 0;
+            for (usize j = 0; j < arrlenu(n->waits_on); ++j) {
+                if (g->nodes[n->waits_on[j]].is_dirty) {
+                    p_deps++;
+                }
+            }
+            atomic_store(&n->pending_deps, p_deps);
+        }
+    }
+
+    atomic_store(&g->remaining_nodes, total_dirty);
+    return 0;
+}
+
+// --- Phase 2: Querying ---
+
+bool zmm_bg_is_dirty(BuildGraph* g, StringView target) {
+    khash_t(node_map)* h = (khash_t(node_map)*)g->node_map;
+    khint_t k = kh_get(node_map, h, target);
+    if (k == kh_end(h)) return false;
+
+    return g->nodes[kh_val(h, k)].is_dirty;
+}
+
+// --- Phase 3: Concurrent Execution ---
+
+typedef struct {
+    BuildGraph* graph;
+    TaskQueue* queue;
+    _Atomic bool* has_error;
+    pthread_mutex_t* done_lock;
+    pthread_cond_t* done_cond;
+} WorkerCtx;
 
 static void* worker_fn(void* arg) {
     WorkerCtx* ctx = (WorkerCtx*)arg;
     NodeId node_id;
 
     while (queue_pop(ctx->queue, &node_id)) {
-        // If an error occurred elsewhere, drain the queue without building
-        // to cleanly exit and unblock the main thread.
         if (atomic_load_explicit(ctx->has_error, memory_order_acquire)) {
-            u32 rem = atomic_fetch_sub(ctx->remaining_nodes, 1);
+            u32 rem = atomic_fetch_sub(&ctx->graph->remaining_nodes, 1);
             if (rem == 1) {
                 pthread_mutex_lock(ctx->done_lock);
                 pthread_cond_signal(ctx->done_cond);
@@ -341,40 +502,30 @@ static void* worker_fn(void* arg) {
 
         Node* node = &ctx->graph->nodes[node_id];
 
-        if (node->is_target) {
-            bool dirty =
-                is_dirty(node->output, node->sources, arrlenu(node->sources),
-                         node->deps, arrlenu(node->deps));
-
-            if (dirty) {
-                __atomic_fetch_add(&ctx->graph->num_builds, 1,
-                                   __ATOMIC_SEQ_CST);
-                int res = ctx->builder(node->sources, arrlenu(node->sources),
-                                       node->output, ctx->thread_idx);
-                if (res != 0) {
-                    // Set error flag; subsequent queue pops will fast-fail
-                    atomic_store_explicit(ctx->has_error, true,
-                                          memory_order_release);
-                }
+        // Execute the node's builder if it's a target
+        if ((node->flags & NODE_FLAG_IS_TARGET) && node->builder) {
+            int res = node->builder(node->sources, arrlenu(node->sources),
+                                    node->output);
+            if (res != 0) {
+                atomic_store_explicit(ctx->has_error, true,
+                                      memory_order_release);
             }
         }
 
-        // Notify dependents
+        // Notify dirty dependents
         for (usize i = 0; i < arrlenu(node->dependents); ++i) {
             NodeId dep_id = node->dependents[i];
             Node* dep_node = &ctx->graph->nodes[dep_id];
 
-            // Only care about dependents that are in our target subgraph
-            if (dep_node->is_in_subgraph) {
+            if (dep_node->is_in_subgraph && dep_node->is_dirty) {
                 u32 prev = atomic_fetch_sub(&dep_node->pending_deps, 1);
-                if (prev == 1) {  // We were the last dependency
+                if (prev == 1) {  // We were the last dirty dependency
                     queue_push(ctx->queue, dep_id);
                 }
             }
         }
 
-        // Signal completion of this node
-        u32 rem = atomic_fetch_sub(ctx->remaining_nodes, 1);
+        u32 rem = atomic_fetch_sub(&ctx->graph->remaining_nodes, 1);
         if (rem == 1) {
             pthread_mutex_lock(ctx->done_lock);
             pthread_cond_signal(ctx->done_cond);
@@ -384,80 +535,10 @@ static void* worker_fn(void* arg) {
     return NULL;
 }
 
-// Recursively walks down dependencies to mark the subgraph we actually care
-// about
-static void mark_subgraph(BuildGraph* g, NodeId start_id,
-                          _Atomic u32* out_remaining) {
-    // Use an stb_ds dynamic array as a manual stack
-    NodeId* stack = NULL;
-    arrpush(stack, start_id);
+int zmm_bg_exec(BuildGraph* g) {
+    u32 total_nodes = atomic_load(&g->remaining_nodes);
+    if (total_nodes == 0) return 0;  // Everything is clean
 
-    while (arrlen(stack) > 0) {
-        // Pop the last node added (LIFO behavior for DFS)
-        NodeId id = arrpop(stack);
-        Node* n = &g->nodes[id];
-
-        // If we've already visited this node through another dependency path,
-        // skip it
-        if (n->is_in_subgraph) {
-            continue;
-        }
-
-        // 1. Mark as part of the current build subgraph
-        n->is_in_subgraph = true;
-
-        // 2. Initialize the atomic counter for the scheduler
-        atomic_store(&n->pending_deps, (u32)arrlenu(n->waits_on));
-
-        // 3. Track total nodes to know when the build is finished
-        atomic_fetch_add(out_remaining, 1);
-
-        // 4. Add all dependencies to the stack to be processed
-        for (usize i = 0; i < arrlenu(n->waits_on); ++i) {
-            NodeId dep_id = n->waits_on[i];
-
-            // Optimization: Only push if the dependent isn't already marked
-            if (!g->nodes[dep_id].is_in_subgraph) {
-                arrpush(stack, dep_id);
-            }
-        }
-    }
-
-    // Clean up the manual stack memory
-    arrfree(stack);
-}
-
-int zmm_bg_build(BuildGraph* g, const SliceCU8* targets, usize num_targets,
-                 BuilderFn builder) {
-    khash_t(node_map)* h = (khash_t(node_map)*)g->node_map;
-
-    // Reset subgraph state for a clean run
-    for (usize i = 0; i < arrlenu(g->nodes); ++i) {
-        g->nodes[i].is_in_subgraph = false;
-    }
-
-    _Atomic u32 remaining_nodes;
-    atomic_init(&remaining_nodes, 0);
-
-    // 1. Resolve all target nodes and mark their combined subgraphs
-    for (usize i = 0; i < num_targets; ++i) {
-        khint_t target_idx = kh_get(node_map, h, targets[i]);
-        if (target_idx == kh_end(h)) {
-            return 1;  // Target not found in the graph
-        }
-
-        NodeId target_id = kh_val(h, target_idx);
-
-        // mark_subgraph safely ignores nodes already marked by a previous
-        // target, so overlapping dependencies are naturally unioned and only
-        // counted once.
-        mark_subgraph(g, target_id, &remaining_nodes);
-    }
-
-    u32 total_nodes = atomic_load(&remaining_nodes);
-    if (total_nodes == 0) return 0;  // Nothing to do
-
-    // Size the queue to the max possible nodes so push() never has to block
     TaskQueue queue;
     queue_init(&queue, total_nodes);
 
@@ -473,35 +554,30 @@ int zmm_bg_build(BuildGraph* g, const SliceCU8* targets, usize num_targets,
     pthread_t* threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
     WorkerCtx* ctxs = (WorkerCtx*)malloc(num_threads * sizeof(WorkerCtx));
 
-    // Spin up thread pool
     for (u32 i = 0; i < num_threads; ++i) {
         ctxs[i] = (WorkerCtx){.graph = g,
-                              .builder = builder,
                               .queue = &queue,
                               .has_error = &has_error,
-                              .remaining_nodes = &remaining_nodes,
                               .done_lock = &done_lock,
-                              .done_cond = &done_cond,
-                              .thread_idx = i};
+                              .done_cond = &done_cond};
         pthread_create(&threads[i], NULL, worker_fn, &ctxs[i]);
     }
 
-    // Seed the queue with leaf nodes (nodes with 0 pending dependencies)
+    // Seed the queue with dirty leaf nodes
     for (usize i = 0; i < arrlenu(g->nodes); ++i) {
-        if (g->nodes[i].is_in_subgraph &&
-            atomic_load(&g->nodes[i].pending_deps) == 0) {
+        Node* n = &g->nodes[i];
+        if (n->is_in_subgraph && n->is_dirty &&
+            atomic_load(&n->pending_deps) == 0) {
             queue_push(&queue, (NodeId)i);
         }
     }
 
-    // Main thread blocks here until the target subgraph is fully resolved
     pthread_mutex_lock(&done_lock);
-    while (atomic_load(&remaining_nodes) > 0) {
+    while (atomic_load(&g->remaining_nodes) > 0) {
         pthread_cond_wait(&done_cond, &done_lock);
     }
     pthread_mutex_unlock(&done_lock);
 
-    // Tear down thread pool
     queue_shutdown(&queue);
     for (u32 i = 0; i < num_threads; ++i) {
         pthread_join(threads[i], NULL);
@@ -514,61 +590,4 @@ int zmm_bg_build(BuildGraph* g, const SliceCU8* targets, usize num_targets,
     queue_free(&queue);
 
     return atomic_load(&has_error) ? -1 : 0;
-}
-
-static void add_dependency_edge(BuildGraph* g, NodeId target_id,
-                                SliceCU8 dep_path) {
-    // Note: get_or_put_node might resize g->nodes. Because we use NodeId
-    // (indices) instead of pointers, this is 100% safe.
-    NodeId dep_id = get_or_put_node(g, dep_path);
-    arrpush(g->nodes[dep_id].dependents, target_id);
-    arrpush(g->nodes[target_id].waits_on, dep_id);
-}
-
-void zmm_tg_init_out(TargetBuilder* tg, BuildGraph* g, SliceCU8 output) {
-    NodeId id = get_or_put_node(g, output);
-    g->nodes[id].is_target = true;
-    tg->g = g;
-    tg->id = id;
-}
-
-void zmm_tg_add_src(TargetBuilder* tb, SliceCU8 const* sources, usize count) {
-    for (usize i = 0; i < count; ++i) {
-        SliceCU8 duped;
-        duped.len = sources[i].len;
-        duped.ptr = (const u8*)zmm_arena_dupe(tb->g->arena, sources[i].ptr,
-                                              sources[i].len);
-
-        arrpush(tb->g->nodes[tb->id].sources, duped);
-        add_dependency_edge(tb->g, tb->id, sources[i]);
-    }
-}
-
-void zmm_tg_add_src_nc(TargetBuilder* tb, SliceCU8 const* sources,
-                       usize count) {
-    for (usize i = 0; i < count; ++i) {
-        // Push the un-copied slice directly
-        arrpush(tb->g->nodes[tb->id].sources, sources[i]);
-        add_dependency_edge(tb->g, tb->id, sources[i]);
-    }
-}
-
-void zmm_tg_add_dep(TargetBuilder* tb, SliceCU8 const* deps, usize count) {
-    for (usize i = 0; i < count; ++i) {
-        SliceCU8 duped;
-        duped.len = deps[i].len;
-        duped.ptr =
-            (const u8*)zmm_arena_dupe(tb->g->arena, deps[i].ptr, deps[i].len);
-
-        arrpush(tb->g->nodes[tb->id].deps, duped);
-        add_dependency_edge(tb->g, tb->id, deps[i]);
-    }
-}
-
-void zmm_tg_add_dep_nc(TargetBuilder* tb, SliceCU8 const* deps, usize count) {
-    for (usize i = 0; i < count; ++i) {
-        // Push the un-copied slice directly
-        arrpush(tb->g->nodes[tb->id].deps, deps[i]);
-        add_dependency_edge(tb->g, tb->id, deps[i]);
-    }
 }

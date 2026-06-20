@@ -18,237 +18,107 @@
 #include "args.h"
 
 #include "print.h"
-#include "slice.h"
+#include "str.h"
 
 // Initializes the builder using your stack buffers
-void zmm_argv_initbuf(ArgvBuilder* cmd, void* flat_buf, usize flat_buf_size,
-                      void* argv_buf, usize argv_buf_size) {
-    cmd->flat = (char*)flat_buf;
-    cmd->flat_cap = flat_buf_size;
-    cmd->flat_len = 0;
-    cmd->flat_is_heap = false;
+API int zmm_argv_initcap(ArgvBuilder* cmd, usize buf_cap, usize argv_cap) {
+    cmd->buf = malloc(buf_cap);
+    cmd->buf_len = 0;
+    cmd->buf_cap = buf_cap;
 
-    cmd->argv = (char**)argv_buf;
-    cmd->argv_cap = argv_buf_size / sizeof(char*);
-    cmd->num_args = 0;
-    cmd->argv_is_heap = false;
+    cmd->argv = malloc(argv_cap * sizeof(char*));
+    cmd->argv_len = 0;
+    cmd->argv_cap = argv_cap;
+
+    return (!cmd->buf) || (!cmd->argv);
 }
 
-// Initializes the builder using your stack buffers
-void zmm_argv_initcap(ArgvBuilder* cmd, usize flat_cap, usize argv_cap) {
-    cmd->flat = malloc(flat_cap);
-    cmd->flat_cap = flat_cap;
-    cmd->flat_len = 0;
-    cmd->flat_is_heap = true;
-
-    cmd->argv = malloc(argv_cap);
-    cmd->argv_cap = argv_cap / sizeof(char*);
-    cmd->num_args = 0;
-    cmd->argv_is_heap = false;
-}
-
-// Internal helper to grow the character buffer safely
-static inline void cmd_ensure_flat(ArgvBuilder* cmd, usize needed) {
-    if (cmd->flat_len + needed > cmd->flat_cap) {
-        usize new_cap = cmd->flat_cap * 2;
-        if (new_cap < cmd->flat_len + needed) new_cap = cmd->flat_len + needed;
-
-        char* new_buf = malloc(new_cap);
-        memcpy(new_buf, cmd->flat, cmd->flat_len);
-
-        if (cmd->num_args > 0) {
-            for (usize i = 0; i < cmd->num_args; i++) {
-                size_t offset = cmd->argv[i] - cmd->flat;
-                cmd->argv[i] = new_buf + offset;
-            }
+static inline int ensure_buf(ArgvBuilder* argv, usize needed) {
+    if (argv->buf_len + needed > argv->buf_cap) {
+        argv->buf_cap = 1;
+        while (argv->buf_len + needed > argv->buf_cap) {
+            argv->buf_cap *= 2;
         }
 
-        if (cmd->flat_is_heap) free(cmd->flat);
-        cmd->flat = new_buf;
-        cmd->flat_cap = new_cap;
-        cmd->flat_is_heap = true;
-    }
-}
-
-// Internal helper to grow the pointer array safely
-static inline void cmd_ensure_argv(ArgvBuilder* cmd, usize needed) {
-    if (cmd->num_args + needed > cmd->argv_cap) {
-        usize new_cap = cmd->argv_cap * 2;
-        if (new_cap < cmd->num_args + needed) new_cap = cmd->num_args + needed;
-
-        char** new_buf = malloc(new_cap * sizeof(char*));
-        memcpy(new_buf, cmd->argv, cmd->num_args * sizeof(char*));
-
-        if (cmd->argv_is_heap) free(cmd->argv);
-        cmd->argv = new_buf;
-        cmd->argv_cap = new_cap;
-        cmd->argv_is_heap = true;
-    }
-}
-void zmm_argv_append(ArgvBuilder* cmd, SliceCU8 arg) {
-    cmd_ensure_flat(cmd, arg.len + 1);
-    cmd_ensure_argv(cmd, 2);
-
-    cmd->argv[cmd->num_args] = cmd->flat + cmd->flat_len;
-
-    memcpy(cmd->flat + cmd->flat_len, arg.ptr, arg.len);
-    cmd->flat_len += arg.len;
-    cmd->flat[cmd->flat_len++] = '\0';
-
-    cmd->num_args++;
-    cmd->argv[cmd->num_args] = NULL;
-}
-
-void zmm_argv_append_argv(ArgvBuilder* cmd, const ArgvBuilder* src) {
-    if (!src || src->num_args == 0) return;
-
-    // 1. Ensure capacity for the entire payload exactly ONCE
-    cmd_ensure_flat(cmd, src->flat_len);
-    cmd_ensure_argv(
-        cmd, src->num_args + 1);  // +1 to ensure room for the NULL terminator
-
-    // 2. Bulk copy ALL character data in a single memcpy
-    memcpy(cmd->flat + cmd->flat_len, src->flat, src->flat_len);
-
-    // 3. Fast-forward the pointers using memory offsets
-    for (usize i = 0; i < src->num_args; i++) {
-        // Calculate where the string started in the source buffer
-        size_t offset = src->argv[i] - src->flat;
-
-        // Map it to the new location in the destination buffer
-        cmd->argv[cmd->num_args + i] = cmd->flat + cmd->flat_len + offset;
+        argv->buf = realloc(argv->buf, argv->buf_cap);
     }
 
-    // 4. Update the tracker variables
-    cmd->flat_len += src->flat_len;
-    cmd->num_args += src->num_args;
-
-    // 5. Cap off the pointer array
-    cmd->argv[cmd->num_args] = NULL;
+    return !argv->buf;
 }
 
-// Append a null-slice terminated array of slices
-void zmm_argv_appendz(ArgvBuilder* cmd, const SliceCU8* args) {
-    for (usize i = 0; args[i].ptr != NULL; i++) {
-        zmm_argv_append(cmd, args[i]);
-    }
-}
+static inline int ensure_argv(ArgvBuilder* argv, usize needed) {
+    if (argv->argv_len + needed > argv->argv_cap) {
+        argv->argv_cap = 1;
+        while (argv->argv_len + needed > argv->argv_cap) {
+            argv->argv_cap *= 2;
+        }
 
-void zmm_argv_pappend(ArgvBuilder* cmd, SliceCU8 arg) {
-    cmd_ensure_flat(cmd, arg.len);
-    memcpy(cmd->flat + cmd->flat_len, arg.ptr, arg.len);
-    cmd->flat_len += arg.len;
-}
-
-void zmm_argv_pfinish(ArgvBuilder* cmd) {
-    cmd_ensure_flat(cmd, 1);
-    cmd_ensure_argv(cmd, 2);
-
-    // Where did this partial string start?
-    // Right after the null terminator of the previous string.
-    char* start_ptr = cmd->flat;
-    if (cmd->num_args > 0) {
-        char* last_arg = cmd->argv[cmd->num_args - 1];
-        start_ptr = last_arg + strlen(last_arg) + 1;
+        argv->argv = realloc(argv->argv, argv->argv_cap);
     }
 
-    cmd->argv[cmd->num_args] = start_ptr;
-    cmd->flat[cmd->flat_len++] = '\0';
-
-    cmd->num_args++;
-    cmd->argv[cmd->num_args] = NULL;
+    return !argv->argv;
 }
 
-// Free any heap memory if SBO limits were exceeded
-void zmm_argv_free(ArgvBuilder* cmd) {
-    if (cmd->flat_is_heap) free(cmd->flat);
-    if (cmd->argv_is_heap) free(cmd->argv);
+API int zmm_argv_append(ArgvBuilder* argv, StringView arg) {
+    if (ensure_buf(argv, arg.len + 1)) return 1;
+    if (ensure_argv(argv, 1)) return 1;
 
-    // Reset to safe zero state
-    cmd->flat = NULL;
-    cmd->argv = NULL;
-    cmd->flat_cap = 0;
-    cmd->argv_cap = 0;
-    cmd->flat_len = 0;
-    cmd->num_args = 0;
+    memcpy(argv->buf + argv->buf_len, arg.ptr, arg.len);
+    argv->argv[argv->argv_len++] = argv->buf + argv->buf_len;
+    argv->buf_len += arg.len;
+    argv->buf[argv->buf_len++] = '\n';
+
+    return 0;
 }
 
-void zmm_argv_print(char* const* argv, usize num_args) {
-    if (num_args == 0) return;
+API int zmm_argv_append_argv(ArgvBuilder* argv, const ArgvBuilder* src) {
+    if (ensure_buf(argv, src->buf_len)) return 1;
+    if (ensure_argv(argv, src->argv_len)) return 1;
 
-    for (usize i = 0; i < num_args - 1; i++) {
-        usize len = strlen(argv[i]);
-        zmm_lprintf("%s ", (SliceCU8){.ptr = (const u8*)argv[i], .len = len});
-    }
-    zmm_lprintf("%sz\n", argv[num_args - 1]);
-    zmm_lemit();
-}
-
-i32 zmm_args_init(Argv* args, int argc, char** argv) {
-    if (argc <= 0 || argv == NULL) {
-        return -1;
-    }
-
-    args->args = (SliceCU8*)malloc((usize)argc * sizeof(SliceCU8));
-    if (!args->args) return -1;
-
-    args->num_args = (usize)argc;
-    for (int i = 0; i < argc; i++) {
-        args->args[i].ptr = (const u8*)argv[i];
-        args->args[i].len = argv[i] ? strlen(argv[i]) : 0;
+    for (usize i = 0; i < src->argv_len; i++) {
+        zmm_argv_append(argv, (StringView){src->argv[i], strlen(src->argv[i])});
     }
 
     return 0;
 }
 
-void zmm_args_free(Argv* args) {
-    if (args && args->args) {
-        free(args->args);
-        args->args = NULL;
-        args->num_args = 0;
-    }
+API int zmm_argv_pstart(ArgvBuilder* argv) {
+    if (ensure_argv(argv, 1)) return 1;
+
+    argv->argv[argv->argv_len++] = argv->buf + argv->buf_len;
+
+    return 0;
 }
 
-bool zmm_args_contains(const Argv* args, SliceCU8 flag) {
-    if (!args || !args->args) return false;
+API int zmm_argv_pappend(ArgvBuilder* argv, StringView arg) {
+    if (ensure_buf(argv, arg.len)) return 1;
 
-    for (usize i = 0; i < args->num_args; i++) {
-        if (slice_eq(args->args[i], flag)) {
-            return true;
-        }
-    }
+    memcpy(argv->buf + argv->buf_len, arg.ptr, arg.len);
+    argv->buf_len += arg.len;
 
-    return false;
+    return 0;
 }
 
-SliceCU8 zmm_args_get_value(const Argv* args, SliceCU8 key) {
-    if (!args || !args->args) return NullSliceCU8;
+API int zmm_argv_pfinish(ArgvBuilder* argv) {
+    if (ensure_buf(argv, 1)) return 1;
 
-    for (usize i = 0; i < args->num_args; i++) {
-        SliceCU8 arg = args->args[i];
+    argv->buf[argv->buf_len++] = '\n';
 
-        if (arg.len >= key.len &&
-            (key.len == 0 || memcmp(arg.ptr, key.ptr, key.len) == 0)) {
-            return (SliceCU8){.ptr = arg.ptr + key.len,
-                              .len = arg.len - key.len};
-        }
-    }
-
-    return NullSliceCU8;
+    return 0;
 }
 
-SliceCU8 zmm_args_get_subsequent(const Argv* args, SliceCU8 key) {
-    if (!args || !args->args) return NullSliceCU8;
+void zmm_argv_free(ArgvBuilder* argv) {
+    free(argv->argv);
+    free(argv->buf);
+}
 
-    for (usize i = 0; i < args->num_args; i++) {
-        if (slice_eq(args->args[i], key)) {
-            if (i + 1 < args->num_args) {
-                return args->args[i + 1];
-            } else {
-                return NullSliceCU8;
-            }
-        }
+void zmm_argv_print(ArgvBuilder* argv) {
+    if (argv->argv_len == 0) return;
+
+    for (usize i = 0; i < argv->argv_len - 1; i++) {
+        usize len = strlen(argv->argv[i]);
+        zmm_lprintf("%s ", (StringView){argv->argv[i], len});
     }
-
-    return NullSliceCU8;
+    zmm_lprintf("%sz\n", argv->argv[argv->argv_len - 1]);
+    zmm_lemit();
 }

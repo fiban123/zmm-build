@@ -23,8 +23,6 @@
 #include <windows.h>
 #endif
 
-#include "slice.h"
-
 void zmm_cpu_init(CpuInfo* info) {
     if (!info) return;
     info->x86 = GetX86Info();
@@ -76,38 +74,33 @@ i32 zmm_cpu_thread_count() {
 #endif
 }
 
-SliceU8 zmm_cpu_brand_string(const CpuInfo* info) {
-    if (!info) return NullSliceU8;
-
+String zmm_cpu_brand_string(const CpuInfo* info) {
     usize len = strlen(info->x86.brand_string);
 
-    SliceU8 s = {.ptr = malloc(len), .len = len};
+    String s = {malloc(len), len};
 
     memcpy(s.ptr, info->x86.brand_string, len);
 
     return s;
 }
 
-SliceU8 zmm_cpu_vendor(const CpuInfo* info) {
-    if (!info) return NullSliceU8;
-
+String zmm_cpu_vendor(const CpuInfo* info) {
     usize len = strlen(info->x86.vendor);
 
-    SliceU8 s = {.ptr = malloc(len), .len = len};
+    String s = {malloc(len), len};
 
     memcpy(s.ptr, info->x86.vendor, len);
 
     return s;
 }
 
-SliceU8 zmm_cpu_uarch_str(const CpuInfo* info) {
-    if (!info) return NullSliceU8;
+String zmm_cpu_uarch_str(const CpuInfo* info) {
     const char* nul_s =
         GetX86MicroarchitectureName(GetX86Microarchitecture(&info->x86));
 
     usize len = strlen(nul_s);
 
-    SliceU8 s = {.ptr = malloc(len), .len = len};
+    String s = {malloc(len), len};
 
     memcpy(s.ptr, nul_s, len);
 
