@@ -15,9 +15,7 @@
  * limitations under the License.
  */
 
-#include "arena.h"
 #include "args.h"
-#include "arr.h"
 #include "builder.h"
 #include "cc.h"
 #include "cpu.h"
@@ -26,6 +24,7 @@
 #include "num.h"
 #include "path.h"
 #include "print.h"
-#include "slice.h"
+#include "str.h"
 #include "sys.h"
+#include "vec.h"
 #include "ztime.h"

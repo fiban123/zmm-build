@@ -22,27 +22,35 @@
 #include "str.h"
 
 typedef struct {
-    char* buf;
-    usize buf_len;
-    usize buf_cap;
-
     char** argv;
     usize argv_len;
     usize argv_cap;
+
+    char* buf;
+    usize buf_len;
+    usize buf_cap;
 } ArgvBuilder;
 
-API int zmm_argv_initcap(ArgvBuilder* cmd, usize buf_cap, usize argv_cap);
+API int zmm_argvb_initcap(ArgvBuilder* cmd, usize buf_cap, usize argv_cap);
 
-API int zmm_argv_append(ArgvBuilder* argv, StringView arg);
+API int zmm_argvb_append(ArgvBuilder* argvb, StringView arg);
 
-API int zmm_argv_append_argv(ArgvBuilder* argv, const ArgvBuilder* src);
+API int zmm_argvb_appendc(ArgvBuilder* argvb, const char* arg);
 
-API int zmm_argv_pstart(ArgvBuilder* argv);
+API int zmm_argvb_append_n(ArgvBuilder* argvb, const StringView* args, usize n);
 
-API int zmm_argv_pappend(ArgvBuilder* argv, StringView arg);
+API int zmm_argvb_appendc_n(ArgvBuilder* argvb, const char* const* args,
+                            usize n);
 
-API int zmm_argv_pfinish(ArgvBuilder* argv);
+API int zmm_argvb_append_argv(ArgvBuilder* argvb, const char* const* argv,
+                              usize argv_len);
 
-void zmm_argv_free(ArgvBuilder* argv);
+API int zmm_argvb_pstart(ArgvBuilder* argvb);
 
-void zmm_argv_print(ArgvBuilder* argv);
+API int zmm_argvb_pappend(ArgvBuilder* argvb, StringView arg);
+
+API int zmm_argvb_pfinish(ArgvBuilder* argvb);
+
+API void zmm_argvb_free(ArgvBuilder* argvb);
+
+void zmm_argv_print(char* const* argv, usize argv_len);

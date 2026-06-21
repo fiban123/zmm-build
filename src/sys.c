@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -37,10 +37,9 @@
 // ----------------------------------------------------------------------------
 #ifndef _WIN32
 
-ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
+API ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
     zmm_argv_print(argv, num_args);
-    ExecResult res = {.status = {.type = TERM_ERROR, .code = -1},
-                      .output = {0}};
+    ExecResult res = {.status = {.code = 1, .type = TERM_ERROR}, .output = {0}};
 
     int pipe_fds[2];
     if (pipe(pipe_fds) != 0) {
@@ -64,6 +63,7 @@ ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
         close(pipe_fds[0]);
         close(pipe_fds[1]);
 
+        // execvp doesnt mutate strings, but isnt const
         execvp(argv[0], argv);
         _exit(1);
     }
@@ -73,21 +73,21 @@ ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
 
     usize cap = 4096;
     usize len = 0;
-    u8* out_buf = (u8*)malloc(cap);
+    char* out_buf = (char*)malloc(cap);
 
     if (!out_buf) {
         close(pipe_fds[0]);
         return res;
     }
 
-    u8 buffer[4096];
+    char buffer[4096];
     while (true) {
         ssize_t bytes = read(pipe_fds[0], buffer, sizeof(buffer));
         if (bytes <= 0) break;
 
         if (len + bytes > cap) {
             cap = (len + bytes) * 2;
-            u8* new_buf = (u8*)realloc(out_buf, cap);
+            char* new_buf = realloc(out_buf, cap);
             if (!new_buf) break;
             out_buf = new_buf;
         }
@@ -104,7 +104,7 @@ ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
         res.status.code = WEXITSTATUS(wait_status);
     } else if (WIFSIGNALED(wait_status)) {
         res.status.type = TERM_SIGNALED;
-        res.status.code = WTERMSIG(wait_status);
+        res.status.code = 1;
     }
 
     res.output.ptr = out_buf;
@@ -112,9 +112,9 @@ ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
     return res;
 }
 
-ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args) {
+API ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args) {
     zmm_argv_print(argv, num_args);
-    ChildTerm status = {TERM_ERROR, -1};
+    ChildTerm status = {.code = 1, .type = TERM_ERROR};
 
     pid_t pid = fork();
     if (pid < 0) return status;
@@ -132,7 +132,7 @@ ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args) {
         status.code = WEXITSTATUS(wait_status);
     } else if (WIFSIGNALED(wait_status)) {
         status.type = TERM_SIGNALED;
-        status.code = WTERMSIG(wait_status);
+        status.code = 1;
     }
 
     return status;
@@ -182,10 +182,9 @@ static char* build_win32_cmdline(char* const* argv, usize num_args) {
     return cmd;
 }
 
-ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
+API ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
     zmm_argv_print(argv, num_args);
-    ExecResult res = {.status = {.type = TERM_ERROR, .code = -1},
-                      .output = {0}};
+    ExecResult res = {.status = {.code = 1, .type = TERM_ERROR}, .output = {0}};
 
     SECURITY_ATTRIBUTES sa = {.nLength = sizeof(SECURITY_ATTRIBUTES),
                               .bInheritHandle = TRUE,
@@ -227,7 +226,7 @@ ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
 
     usize cap = 4096;
     usize len = 0;
-    u8* out_buf = (u8*)malloc(cap);
+    char* out_buf = (char*)malloc(cap);
 
     if (!out_buf) {
         CloseHandle(read_pipe);
@@ -235,7 +234,7 @@ ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
         return res;
     }
 
-    u8 buffer[4096];
+    char buffer[4096];
     while (true) {
         DWORD bytes_read = 0;
         if (!ReadFile(read_pipe, buffer, (DWORD)sizeof(buffer), &bytes_read,
@@ -246,7 +245,7 @@ ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
 
         if (len + bytes_read > cap) {
             cap = (len + bytes_read) * 2;
-            u8* new_buf = (u8*)realloc(out_buf, cap);
+            char* new_buf = (char*)realloc(out_buf, cap);
             if (!new_buf) break;
             out_buf = new_buf;
         }
@@ -268,8 +267,8 @@ ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
     return res;
 }
 
-ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args) {
-    ChildTerm status = {TERM_ERROR, -1};
+API ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args) {
+    ChildTerm status = {.code = 1, .type = TERM_ERROR};
 
     STARTUPINFOA si = {0};
     si.cb = sizeof(STARTUPINFOA);
@@ -292,7 +291,7 @@ ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args) {
     CloseHandle(pi.hProcess);
 
     status.type = TERM_EXITED;
-    status.code = (i32)exit_code;
+    status.code = (int)exit_code;
     return status;
 }
 
@@ -302,12 +301,12 @@ ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args) {
 // Shared Implementation
 // ----------------------------------------------------------------------------
 
-ChildTerm zmm_sys_exec_print(char* const* argv, usize num_args) {
+API ChildTerm zmm_sys_exec_print(char* const* argv, usize num_args) {
     ExecResult res = zmm_sys_exec(argv, num_args);
 
     if (res.status.type != TERM_ERROR && res.output.len > 0) {
-        SliceCU8 out_slice = {.ptr = res.output.ptr, .len = res.output.len};
-        zmm_printf("%s\n", out_slice);
+        StringView out_view = zmm_str_stov(res.output);
+        zmm_printf("%s\n", out_view);
     }
 
     ChildTerm final_status = res.status;
@@ -316,14 +315,16 @@ ChildTerm zmm_sys_exec_print(char* const* argv, usize num_args) {
     return final_status;
 }
 
-ExecResult zmm_sys_exec_flat(const char* arg_buf, usize num_args) {
+API ExecResult zmm_sys_exec_flat(const char* arg_buf, usize num_args) {
     if (num_args == 0) {
-        return (ExecResult){.status = {TERM_ERROR, -1}, .output = {0}};
+        return (ExecResult){.status = {.code = 1, .type = TERM_ERROR},
+                            .output = {0}};
     }
 
-    char** argv = (char**)malloc((num_args + 1) * sizeof(char*));
+    char** argv = malloc((num_args + 1) * sizeof(char*));
     if (!argv) {
-        return (ExecResult){.status = {TERM_ERROR, -1}, .output = {0}};
+        return (ExecResult){.status = {.code = 1, .type = TERM_ERROR},
+                            .output = {0}};
     }
 
     const char* current = arg_buf;
@@ -339,12 +340,12 @@ ExecResult zmm_sys_exec_flat(const char* arg_buf, usize num_args) {
     return res;
 }
 
-ChildTerm zmm_sys_exec_print_flat(const char* arg_buf, usize num_args) {
+API ChildTerm zmm_sys_exec_print_flat(const char* arg_buf, usize num_args) {
     ExecResult res = zmm_sys_exec_flat(arg_buf, num_args);
 
     if (res.status.type != TERM_ERROR && res.output.len > 0) {
-        SliceCU8 out_slice = {.ptr = res.output.ptr, .len = res.output.len};
-        zmm_printf("%s\n", out_slice);
+        StringView out_view = zmm_str_stov(res.output);
+        zmm_printf("%s\n", out_view);
     }
 
     ChildTerm final_status = res.status;
@@ -353,14 +354,14 @@ ChildTerm zmm_sys_exec_print_flat(const char* arg_buf, usize num_args) {
     return final_status;
 }
 
-ChildTerm zmm_sys_exec_redirect_flat(const char* arg_buf, usize num_args) {
+API ChildTerm zmm_sys_exec_redirect_flat(const char* arg_buf, usize num_args) {
     if (num_args == 0) {
-        return (ChildTerm){TERM_ERROR, -1};
+        return (ChildTerm){.code = 1, .type = TERM_ERROR};
     }
 
     char** argv = (char**)malloc((num_args + 1) * sizeof(char*));
     if (!argv) {
-        return (ChildTerm){TERM_ERROR, -1};
+        return (ChildTerm){.code = 1, .type = TERM_ERROR};
     }
 
     const char* current = arg_buf;

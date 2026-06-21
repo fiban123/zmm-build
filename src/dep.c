@@ -18,26 +18,26 @@
 #include "dep.h"
 
 #include <ctype.h>
-#include <stb/stb_ds.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "str.h"
+#include "vec.h"
 
-i32 zmm_dep_parse(arr(String) * deps, StringView path) {
-    if (!deps) return -1;
+API int zmm_dep_parse(vec(String) * deps, StringView path) {
+    if (!deps) return 1;
 
     char* path_nul = zmm_str_vtoc(path);
-    if (!path_nul) return -1;
+    if (!path_nul) return 1;
 
     FILE* f = fopen(path_nul, "rb");
     free(path_nul);
-    if (!f) return -1;
+    if (!f) return 1;
 
     // 1024 byte fast-path
-    u8 stack_buf[1024];
-    u8* token_buf = stack_buf;
+    char stack_buf[1024];
+    char* token_buf = stack_buf;
     usize token_cap = sizeof(stack_buf);
     usize token_len = 0;
 
@@ -45,14 +45,14 @@ i32 zmm_dep_parse(arr(String) * deps, StringView path) {
     bool escaping = false;
     bool skip_lf = false;
 
-    u8 chunk[128];
+    char chunk[128];
     usize bytes_read;
 
 #define APPEND_CHAR(c)                                   \
     do {                                                 \
         if (token_len >= token_cap) {                    \
             usize new_cap = token_cap * 2;               \
-            u8* new_buf = (u8*)malloc(new_cap);          \
+            char* new_buf = malloc(new_cap);             \
             memcpy(new_buf, token_buf, token_len);       \
             if (token_buf != stack_buf) free(token_buf); \
             token_buf = new_buf;                         \
@@ -65,10 +65,10 @@ i32 zmm_dep_parse(arr(String) * deps, StringView path) {
     do {                                                           \
         if (token_len > 0) {                                       \
             if (seen_colon) {                                      \
-                u8* new_str = (u8*)malloc(token_len);              \
+                char* new_str = malloc(token_len);                 \
                 memcpy(new_str, token_buf, token_len);             \
                 String slice = {.ptr = new_str, .len = token_len}; \
-                arrput(*deps, slice);                              \
+                vecpush(*deps, slice);                             \
             }                                                      \
             token_len = 0;                                         \
         }                                                          \
@@ -76,7 +76,7 @@ i32 zmm_dep_parse(arr(String) * deps, StringView path) {
 
     while ((bytes_read = fread(chunk, 1, sizeof(chunk), f)) > 0) {
         for (usize i = 0; i < bytes_read; i++) {
-            u8 c = chunk[i];
+            char c = chunk[i];
 
             if (skip_lf) {
                 skip_lf = false;

@@ -18,49 +18,54 @@
 
 #include <stdbool.h>
 
+#include "export.h"
 #include "str.h"
 
 typedef int (*BuilderFn)(const StringView* sources, usize num_sources,
                          StringView output);
 
-// Opaque types
-typedef struct BuildGraph BuildGraph;
-typedef struct TargetBuilder TargetBuilder;
+struct Node;
 
-// --- Graph Management ---
-void zmm_bg_init(BuildGraph* g);
-void zmm_bg_free(BuildGraph* g);
+typedef struct {
+    struct Node* nodes;
+    void* node_map;
+    char** internal_allocs;
 
-// --- Phase 1: Planning ---
-// Evaluates the graph, stats files, and builds the execution plan.
-int zmm_bg_prepare(BuildGraph* g, const StringView* targets, usize num_targets);
+    // holds the number of targets which are
+    // dirty.
+    usize remaining_dirty;
+} BuildGraph;
 
-// --- Phase 2: Querying ---
-// Returns true if the target is scheduled to be rebuilt (O(1) lookup).
-// Must be called AFTER zmm_bg_prepare.
-bool zmm_bg_is_dirty(BuildGraph* g, StringView target);
+typedef struct TargetBuilder {
+    BuildGraph* g;
+    usize id;
+} TargetBuilder;
 
-// --- Phase 3: Execution ---
-// Executes the plan concurrently. No disk I/O for timestamps happens here.
-int zmm_bg_exec(BuildGraph* g);
+API void zmm_bg_init(BuildGraph* g);
+API void zmm_bg_free(BuildGraph* g);
 
-// --- Direct Addition API ---
-void zmm_bg_add(BuildGraph* g, const StringView* sources, usize num_sources,
-                StringView output, const StringView* deps, usize num_deps,
-                BuilderFn builder, bool always_dirty);
-void zmm_bg_add_phony(BuildGraph* g, const StringView* sources,
-                      usize num_sources, StringView output,
-                      const StringView* deps, usize num_deps, BuilderFn builder,
-                      bool always_dirty);
+API int zmm_bg_prepare(BuildGraph* g, const StringView* targets,
+                       usize num_targets);
 
-// --- TargetBuilder API ---
-void zmm_tg_init(TargetBuilder* tg, BuildGraph* g, StringView output);
-void zmm_tg_init_phony(TargetBuilder* tg, BuildGraph* g, StringView output);
+API bool zmm_bg_is_dirty(BuildGraph* g, StringView target);
 
-// Target Modifiers
-void zmm_tg_set_builder(TargetBuilder* tg, BuilderFn builder);
-void zmm_tg_set_phony(TargetBuilder* tg);
-void zmm_tg_set_always_dirty(TargetBuilder* tg);
+API int zmm_bg_exec(BuildGraph* g);
 
-void zmm_tg_add_src(TargetBuilder* tb, const StringView* sources, usize count);
-void zmm_tg_add_dep(TargetBuilder* tb, const StringView* deps, usize count);
+API int zmm_bg_add(BuildGraph* g, const StringView* sources, usize num_sources,
+                   StringView output, const StringView* deps, usize num_deps,
+                   BuilderFn builder, bool always_dirty);
+
+API int zmm_bg_add_phony(BuildGraph* g, const StringView* sources,
+                         usize num_sources, StringView output,
+                         const StringView* deps, usize num_deps,
+                         BuilderFn builder, bool always_dirty);
+
+API void zmm_tg_init(TargetBuilder* tg, BuildGraph* g, StringView output);
+
+API void zmm_tg_set_builder(TargetBuilder* tg, BuilderFn builder);
+API void zmm_tg_set_phony(TargetBuilder* tg);
+API void zmm_tg_set_always_dirty(TargetBuilder* tg);
+
+API int zmm_tg_add_src(TargetBuilder* tb, const StringView* sources,
+                       usize count);
+API int zmm_tg_add_dep(TargetBuilder* tb, const StringView* deps, usize count);

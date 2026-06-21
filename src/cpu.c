@@ -23,13 +23,14 @@
 #include <windows.h>
 #endif
 
-void zmm_cpu_init(CpuInfo* info) {
+API void zmm_cpu_init(CpuInfo* info) {
     if (!info) return;
     info->x86 = GetX86Info();
     info->cache = GetX86CacheInfo();
 }
 
-i32 zmm_cpu_cache_size(const CpuInfo* info, int level, CacheType cache_type) {
+API i32 zmm_cpu_cache_size(const CpuInfo* info, int level,
+                           CacheType cache_type) {
     if (!info) return 0;
     for (int i = 0; i < info->cache.size; ++i) {
         if (info->cache.levels[i].level == level &&
@@ -40,16 +41,16 @@ i32 zmm_cpu_cache_size(const CpuInfo* info, int level, CacheType cache_type) {
     return 0;
 }
 
-i32 zmm_cpu_l1d_size(const CpuInfo* info) {
+API i32 zmm_cpu_l1d_size(const CpuInfo* info) {
     // We specifically want L1 Data, not Instruction
     return zmm_cpu_cache_size(info, 1, CPU_FEATURE_CACHE_DATA);
 }
 
-i32 zmm_cpu_l1i_size(const CpuInfo* info) {
+API i32 zmm_cpu_l1i_size(const CpuInfo* info) {
     return zmm_cpu_cache_size(info, 1, CPU_FEATURE_CACHE_INSTRUCTION);
 }
 
-i32 zmm_cpu_l2_size(const CpuInfo* info) {
+API i32 zmm_cpu_l2_size(const CpuInfo* info) {
     int size = zmm_cpu_cache_size(info, 2, CPU_FEATURE_CACHE_UNIFIED);
     if (size == 0) {
         size = zmm_cpu_cache_size(info, 2, CPU_FEATURE_CACHE_DATA);
@@ -57,12 +58,12 @@ i32 zmm_cpu_l2_size(const CpuInfo* info) {
     return size;
 }
 
-i32 zmm_cpu_l3_size(const CpuInfo* info) {
+API i32 zmm_cpu_l3_size(const CpuInfo* info) {
     // L3 is universally Unified
     return zmm_cpu_cache_size(info, 3, CPU_FEATURE_CACHE_UNIFIED);
 }
 
-i32 zmm_cpu_thread_count() {
+API i32 zmm_cpu_thread_count() {
 #ifdef _WIN32
     SYSTEM_INFO sysinfo;
     GetSystemInfo(&sysinfo);
@@ -74,7 +75,7 @@ i32 zmm_cpu_thread_count() {
 #endif
 }
 
-String zmm_cpu_brand_string(const CpuInfo* info) {
+API String zmm_cpu_brand_string(const CpuInfo* info) {
     usize len = strlen(info->x86.brand_string);
 
     String s = {malloc(len), len};
@@ -84,7 +85,7 @@ String zmm_cpu_brand_string(const CpuInfo* info) {
     return s;
 }
 
-String zmm_cpu_vendor(const CpuInfo* info) {
+API String zmm_cpu_vendor(const CpuInfo* info) {
     usize len = strlen(info->x86.vendor);
 
     String s = {malloc(len), len};
@@ -94,7 +95,7 @@ String zmm_cpu_vendor(const CpuInfo* info) {
     return s;
 }
 
-String zmm_cpu_uarch_str(const CpuInfo* info) {
+API String zmm_cpu_uarch_str(const CpuInfo* info) {
     const char* nul_s =
         GetX86MicroarchitectureName(GetX86Microarchitecture(&info->x86));
 
@@ -107,10 +108,14 @@ String zmm_cpu_uarch_str(const CpuInfo* info) {
     return s;
 }
 
-i32 zmm_cpu_family(const CpuInfo* info) { return info ? info->x86.family : 0; }
+API i32 zmm_cpu_family(const CpuInfo* info) {
+    return info ? info->x86.family : 0;
+}
 
-i32 zmm_cpu_model(const CpuInfo* info) { return info ? info->x86.model : 0; }
+API i32 zmm_cpu_model(const CpuInfo* info) {
+    return info ? info->x86.model : 0;
+}
 
-i32 zmm_cpu_stepping(const CpuInfo* info) {
+API i32 zmm_cpu_stepping(const CpuInfo* info) {
     return info ? info->x86.stepping : 0;
 }

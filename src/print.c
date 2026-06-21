@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,10 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200112L
-#endif
 
 #include "print.h"
 
@@ -28,7 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "slice.h"
+#include "str.h"
 
 // -----------------------------------------------------------------------------
 // Writer Definition
@@ -44,7 +40,7 @@ typedef struct {
     usize flush_len;
 
     bool is_tl;
-} ZmmWriter;
+} Writer;
 
 // -----------------------------------------------------------------------------
 // Thread-Local Storage (Flattened for Zero-Branch Access)
@@ -61,7 +57,7 @@ static pthread_mutex_t lemit_mutex = PTHREAD_MUTEX_INITIALIZER;
 // -----------------------------------------------------------------------------
 // Core Block Writer
 // -----------------------------------------------------------------------------
-static inline void zmm_write_block(ZmmWriter* w, const char* data, usize len) {
+static inline void zmm_write_block(Writer* w, const char* data, usize len) {
     if (len == 0) return;
 
     if (w->stream) {
@@ -105,8 +101,9 @@ static inline void zmm_write_block(ZmmWriter* w, const char* data, usize len) {
         tl_len += len;
     } else if (w->buf) {
         usize space_left = 0;
-        if (w->written < w->size - 1) {
-            space_left = w->size - 1 - w->written;
+        // Removed the `- 1` since we are no longer reserving space for \0
+        if (w->written < w->size) {
+            space_left = w->size - w->written;
         }
         usize copy_len = len < space_left ? len : space_left;
         if (copy_len > 0) {
@@ -130,7 +127,7 @@ static const char DIGIT_PAIRS[201] =
     "6061626364656667686970717273747576777879"
     "8081828384858687888990919293949596979899";
 
-static inline void format_u64(ZmmWriter* w, u64 val) {
+static inline void format_u64(Writer* w, u64 val) {
     char buf[24];
     int i = sizeof(buf);
 
@@ -154,7 +151,7 @@ static inline void format_u64(ZmmWriter* w, u64 val) {
     zmm_write_block(w, &buf[i], sizeof(buf) - i);
 }
 
-static inline void format_i64(ZmmWriter* w, i64 val) {
+static inline void format_i64(Writer* w, i64 val) {
     if (val < 0) {
         zmm_write_block(w, "-", 1);
         val = -val;
@@ -162,7 +159,7 @@ static inline void format_i64(ZmmWriter* w, i64 val) {
     format_u64(w, (u64)val);
 }
 
-static inline void format_hex(ZmmWriter* w, u64 val) {
+static inline void format_hex(Writer* w, u64 val) {
     char buf[24];
     int i = sizeof(buf);
     const char* hex_chars = "0123456789abcdef";
@@ -178,8 +175,7 @@ static inline void format_hex(ZmmWriter* w, u64 val) {
     zmm_write_block(w, &buf[i], sizeof(buf) - i);
 }
 
-// Ready for "%.2f" - implements basic precision tracking and rounding
-static inline void format_f64(ZmmWriter* w, double val, int precision) {
+static inline void format_f64(Writer* w, double val, int precision) {
     if (val < 0) {
         zmm_write_block(w, "-", 1);
         val = -val;
@@ -212,11 +208,10 @@ static inline void format_f64(ZmmWriter* w, double val, int precision) {
 // -----------------------------------------------------------------------------
 // Core Parser (Vectorized Literal Scanning + O(1) Switch)
 // -----------------------------------------------------------------------------
-static usize zmm_vformat(ZmmWriter* w, const char* format, va_list args) {
+static usize zmm_vformat(Writer* w, const char* format, va_list args) {
     const char* f = format;
 
     while (*f != '\0') {
-        // Highly optimized intrinsic scan for the next '%'
         const char* next = strchr(f, '%');
         if (!next) {
             zmm_write_block(w, f, strlen(f));
@@ -235,8 +230,6 @@ static usize zmm_vformat(ZmmWriter* w, const char* format, va_list args) {
             continue;
         }
 
-        // --- NEW: Simple Precision Parser ---
-        // Allows for formats like "%.2f" or "%.4f"
         int precision = 6;  // default precision
         if (*f == '.') {
             f++;
@@ -247,7 +240,6 @@ static usize zmm_vformat(ZmmWriter* w, const char* format, va_list args) {
             }
         }
 
-        // O(1) jump table instead of expensive strncmp chaining
         switch (*f) {
             case 'i':
                 if (f[1] == '3' && f[2] == '2') {
@@ -300,11 +292,12 @@ static usize zmm_vformat(ZmmWriter* w, const char* format, va_list args) {
                     format_i64(w, va_arg(args, ssize));
                     f += 3;
                 } else {
-                    SliceCU8 slice = va_arg(args, SliceCU8);
-                    if (!slice.ptr)
+                    // Replaced SliceCU8 with StringView
+                    StringView sv = va_arg(args, StringView);
+                    if (!sv.ptr)
                         zmm_write_block(w, "(null)", 6);
                     else
-                        zmm_write_block(w, (const char*)slice.ptr, slice.len);
+                        zmm_write_block(w, sv.ptr, sv.len);
                     f += 1;
                 }
                 break;
@@ -355,41 +348,40 @@ static usize zmm_vformat(ZmmWriter* w, const char* format, va_list args) {
         w->flush_len = 0;
     }
 
-    if (!w->stream && !w->is_tl && w->buf && w->size > 0) {
-        usize null_pos = w->written < w->size ? w->written : w->size - 1;
-        w->buf[null_pos] = '\0';
-    }
+    // Null termination block cleanly removed
 
     return w->written;
 }
 
-usize zmm_snprintf(char* str, usize size, const char* format, ...) {
-    ZmmWriter w = {
-        .buf = str, .size = size, .written = 0};  // flush_buf remains NULL
+API StringView zmm_snprintf(String str, const char* format, ...) {
+    Writer w = {.buf = str.ptr, .size = str.len, .written = 0};
     va_list args;
     va_start(args, format);
     usize ret = zmm_vformat(&w, format, args);
     va_end(args);
-    return ret;
+
+    // Clamp the returned view length so it reflects the actual written bytes
+    usize actual_len = ret < str.len ? ret : str.len;
+    return (StringView){.ptr = str.ptr, .len = actual_len};
 }
 
-usize zmm_sprintf(char* str, const char* format, ...) {
-    ZmmWriter w = {.buf = str, .size = USIZE_MAX, .written = 0};
+API StringView zmm_sprintf(String str, const char* format, ...) {
+    Writer w = {.buf = str.ptr, .size = str.len, .written = 0};
     va_list args;
     va_start(args, format);
     usize ret = zmm_vformat(&w, format, args);
     va_end(args);
-    return ret;
+
+    usize actual_len = ret < str.len ? ret : str.len;
+    return (StringView){.ptr = str.ptr, .len = actual_len};
 }
 
-usize zmm_printf(const char* format, ...) {
-    // Memory efficient: The 1024-byte buffer is safely allocated on the stack
-    // ONLY when zmm_printf is executed.
+API usize zmm_printf(const char* format, ...) {
     char stack_buf[1024];
-    ZmmWriter w = {.stream = stdout,
-                   .flush_buf = stack_buf,
-                   .flush_cap = sizeof(stack_buf),
-                   .flush_len = 0};
+    Writer w = {.stream = stdout,
+                .flush_buf = stack_buf,
+                .flush_cap = sizeof(stack_buf),
+                .flush_len = 0};
     va_list args;
     va_start(args, format);
     usize ret = zmm_vformat(&w, format, args);
@@ -397,9 +389,8 @@ usize zmm_printf(const char* format, ...) {
     return ret;
 }
 
-// Write to the current thread's thread-local accumulator
-usize zmm_lprintf(const char* format, ...) {
-    ZmmWriter w = {.is_tl = true};  // Engage thread-local logic
+API usize zmm_lprintf(const char* format, ...) {
+    Writer w = {.is_tl = true};
     va_list args;
     va_start(args, format);
     usize ret = zmm_vformat(&w, format, args);
@@ -407,11 +398,10 @@ usize zmm_lprintf(const char* format, ...) {
     return ret;
 }
 
-void zmm_lemit(void) {
+API void zmm_lemit(void) {
     if (tl_len == 0) return;
 
     pthread_mutex_lock(&lemit_mutex);
-    // Write directly from the single active pointer
     fwrite(tl_active_buf, 1, tl_len, stdout);
     fflush(stdout);
     pthread_mutex_unlock(&lemit_mutex);

@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,42 +18,36 @@
 #include "cc.h"
 
 #include <jsmn/jsmn.h>
-#include <stb/stb_ds.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "vec.h"
 
 // --- Buffered Output ---
 
 static inline void ob_flush(CompileCommands* cc) {
-    if (cc->buf_len) {
-        fwrite(cc->buf, 1, cc->buf_len, cc->f);
-        cc->buf_len = 0;
+    usize len = vecsize(cc->buf);
+    if (len > 0) {
+        fwrite(cc->buf, 1, len, cc->f);
+        vecsetsize(cc->buf, 0);  // Reset length, but retain capacity memory
     }
 }
 
 static inline void ob_write(CompileCommands* cc, const void* data, usize len) {
     const char* d = (const char*)data;
-    while (len > 0) {
-        usize space = sizeof(cc->buf) - cc->buf_len;
-        usize chunk = len < space ? len : space;
-        memcpy(cc->buf + cc->buf_len, d, chunk);
-        cc->buf_len += chunk;
-        d += chunk;
-        len -= chunk;
-        if (cc->buf_len >= sizeof(cc->buf)) ob_flush(cc);
-    }
+    usize old_len = vecsize(cc->buf);
+    vecsetsize(cc->buf, old_len + len);
+    memcpy(cc->buf + old_len, d, len);
 }
 
 static inline void ob_puts(CompileCommands* cc, const char* s) {
     ob_write(cc, s, strlen(s));
 }
 
-static inline void ob_putc(CompileCommands* cc, char c) {
-    if (cc->buf_len >= sizeof(cc->buf)) ob_flush(cc);
-    cc->buf[cc->buf_len++] = c;
-}
+static inline void ob_putc(CompileCommands* cc, char c) { vecpush(cc->buf, c); }
 
-static void write_escaped_string(CompileCommands* cc, const u8* ptr,
+static void write_escaped_string(CompileCommands* cc, const char* ptr,
                                  usize len) {
     ob_putc(cc, '"');
     for (usize i = 0; i < len; i++) {
@@ -83,26 +77,32 @@ static void write_escaped_string(CompileCommands* cc, const u8* ptr,
 
 // --- Writer API ---
 
-i32 zmm_cc_init(CompileCommands* cc, SliceCU8 path) {
+API int zmm_cc_init(CompileCommands* cc, StringView path) {
     memset(cc, 0, sizeof(CompileCommands));
 
-    char* nul_path = slice_to_cstr(path);
-    if (!nul_path) return -1;
+    char* nul_path = zmm_str_vtoc(path);
+    if (!nul_path) return 1;
 
     cc->f = fopen(nul_path, "wb");
     free(nul_path);
-    if (!cc->f) return -1;
+    if (!cc->f) return 1;
 
-    pthread_mutex_init(&cc->lock, NULL);
+    cc->lock = malloc(sizeof(pthread_mutex_t));
+    if (!cc->lock) {
+        fclose(cc->f);
+        return 1;
+    }
+    pthread_mutex_init((pthread_mutex_t*)cc->lock, NULL);
 
     ob_puts(cc, "[\n");
+    ob_flush(cc);
 
     return 0;
 }
 
-i32 zmm_cc_append(CompileCommands* cc, SliceCU8 dir, SliceCU8 file,
-                  const char* args, usize num_args) {
-    pthread_mutex_lock(&cc->lock);
+API void zmm_cc_append(CompileCommands* cc, StringView dir, StringView file,
+                       const char* args, usize num_args) {
+    pthread_mutex_lock((pthread_mutex_t*)cc->lock);
 
     if (cc->count > 0) {
         ob_puts(cc, ",\n");
@@ -118,7 +118,7 @@ i32 zmm_cc_append(CompileCommands* cc, SliceCU8 dir, SliceCU8 file,
     for (usize a = 0; a < num_args; a++) {
         usize slen = strlen(curr_arg);
         ob_puts(cc, "            ");
-        write_escaped_string(cc, (const u8*)curr_arg, slen);
+        write_escaped_string(cc, curr_arg, slen);
         if (a < num_args - 1) ob_putc(cc, ',');
         ob_putc(cc, '\n');
         curr_arg += slen + 1;
@@ -127,25 +127,25 @@ i32 zmm_cc_append(CompileCommands* cc, SliceCU8 dir, SliceCU8 file,
     ob_puts(cc, "        ]\n    }");
 
     cc->count++;
+    ob_flush(cc);
 
-    pthread_mutex_unlock(&cc->lock);
-
-    return 0;
+    pthread_mutex_unlock((pthread_mutex_t*)cc->lock);
 }
 
-i32 zmm_cc_finish(CompileCommands* cc) {
-    if (!cc->f) return -1;
-
+API void zmm_cc_finish(CompileCommands* cc) {
     ob_puts(cc, "\n]\n");
     ob_flush(cc);
     fclose(cc->f);
     cc->f = NULL;
 
-    pthread_mutex_destroy(&cc->lock);
+    vecfree(cc->buf);
 
-    return 0;
+    if (cc->lock) {
+        pthread_mutex_destroy((pthread_mutex_t*)cc->lock);
+        free(cc->lock);
+        cc->lock = NULL;
+    }
 }
-
 // --- Parser Helpers ---
 
 static inline bool jsoneq(const char* json, jsmntok_t* tok, const char* s) {
@@ -156,7 +156,7 @@ static inline bool jsoneq(const char* json, jsmntok_t* tok, const char* s) {
     return false;
 }
 
-static int skip_token(jsmntok_t* t, int num_tokens, int current) {
+static inline int skip_token(jsmntok_t* t, int num_tokens, int current) {
     int end = t[current].end;
     int next = current + 1;
     while (next < num_tokens && t[next].start < end) next++;
@@ -166,7 +166,7 @@ static int skip_token(jsmntok_t* t, int num_tokens, int current) {
 // Writes an unescaped JSON string into an existing buffer. Returns actual
 // length written.
 static usize unescape_string_into(const char* json, jsmntok_t* tok,
-                                   char* dest) {
+                                  char* dest) {
     usize out_idx = 0;
     for (int i = tok->start; i < tok->end; i++) {
         if (json[i] == '\\' && i + 1 < tok->end) {
@@ -193,23 +193,22 @@ static usize unescape_string_into(const char* json, jsmntok_t* tok,
     return out_idx;
 }
 
-static SliceU8 unescape_string(const char* json, jsmntok_t* tok,
-                                ArenaAlloc* arena) {
+static StringView unescape_string(const char* json, jsmntok_t* tok) {
     usize max_len = tok->end - tok->start;
-    char* dest = zmm_arena_alloc(arena, max_len + 1);
+    char* dest = malloc(max_len + 1);
     usize actual_len = unescape_string_into(json, tok, dest);
-    return (SliceU8){.ptr = (u8*)dest, .len = actual_len};
+    return (StringView){dest, actual_len};
 }
 
 // --- Parser API ---
 
-i32 zmm_cc_parse(arr(CompileCommand)* out, ArenaAlloc* arena, SliceCU8 path) {
-    char* nul_path = slice_to_cstr(path);
-    if (!nul_path) return -1;
+API int zmm_cc_parse(CompileCommand** out, StringView path) {
+    char* nul_path = zmm_str_vtoc(path);
+    if (!nul_path) return 1;
 
     FILE* f = fopen(nul_path, "r");
     free(nul_path);
-    if (!f) return -1;
+    if (!f) return 1;
 
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
@@ -217,13 +216,13 @@ i32 zmm_cc_parse(arr(CompileCommand)* out, ArenaAlloc* arena, SliceCU8 path) {
 
     if (fsize < 0) {
         fclose(f);
-        return -1;
+        return 1;
     }
 
     char* json_str = malloc(fsize + 1);
     if (!json_str) {
         fclose(f);
-        return -1;
+        return 1;
     }
 
     fread(json_str, 1, fsize, f);
@@ -238,7 +237,7 @@ i32 zmm_cc_parse(arr(CompileCommand)* out, ArenaAlloc* arena, SliceCU8 path) {
     int tok_count = jsmn_parse(&p, json_str, json_len, NULL, 0);
     if (tok_count < 0) {
         free(json_str);
-        return -1;
+        return 1;
     }
 
     jsmntok_t* t = malloc(sizeof(jsmntok_t) * tok_count);
@@ -248,7 +247,7 @@ i32 zmm_cc_parse(arr(CompileCommand)* out, ArenaAlloc* arena, SliceCU8 path) {
     if (tok_count < 1 || t[0].type != JSMN_ARRAY) {
         free(t);
         free(json_str);
-        return -1;
+        return 1;
     }
 
     int i = 1;
@@ -268,12 +267,10 @@ i32 zmm_cc_parse(arr(CompileCommand)* out, ArenaAlloc* arena, SliceCU8 path) {
             int val_idx = i + 1;
 
             if (jsoneq(json_str, key, "directory")) {
-                cmd.directory = slice_cast(
-                    SliceCU8, unescape_string(json_str, &t[val_idx], arena));
+                cmd.directory = unescape_string(json_str, &t[val_idx]);
                 i = skip_token(t, tok_count, val_idx);
             } else if (jsoneq(json_str, key, "file")) {
-                cmd.file = slice_cast(
-                    SliceCU8, unescape_string(json_str, &t[val_idx], arena));
+                cmd.file = unescape_string(json_str, &t[val_idx]);
                 i = skip_token(t, tok_count, val_idx);
             } else if (jsoneq(json_str, key, "arguments")) {
                 if (t[val_idx].type == JSMN_ARRAY) {
@@ -282,12 +279,11 @@ i32 zmm_cc_parse(arr(CompileCommand)* out, ArenaAlloc* arena, SliceCU8 path) {
                     usize max_packed_len = 0;
                     int arg_i = val_idx + 1;
                     for (usize a = 0; a < cmd.num_args; a++) {
-                        max_packed_len +=
-                            (t[arg_i].end - t[arg_i].start) + 1;
+                        max_packed_len += (t[arg_i].end - t[arg_i].start) + 1;
                         arg_i = skip_token(t, tok_count, arg_i);
                     }
 
-                    cmd.args = zmm_arena_alloc(arena, max_packed_len);
+                    cmd.args = malloc(max_packed_len);
                     char* current_arg_ptr = cmd.args;
 
                     arg_i = val_idx + 1;
@@ -305,7 +301,7 @@ i32 zmm_cc_parse(arr(CompileCommand)* out, ArenaAlloc* arena, SliceCU8 path) {
                 i = skip_token(t, tok_count, val_idx);
             }
         }
-        arrpush(*out, cmd);
+        vecpush(*out, cmd);
     }
 
     free(t);

@@ -33,7 +33,7 @@ API void zmm_cpu_init(CpuInfo* info);
 
 #define zmm_cpu_supports(info_ptr, feat) ((info_ptr)->x86.features.feat)
 
-API i32 zmm_cpu_cache_size(const CpuInfo* info, int level,
+API int zmm_cpu_cache_size(const CpuInfo* info, int level,
                            CacheType cache_type);
 
 API i32 zmm_cpu_l1d_size(const CpuInfo* info);

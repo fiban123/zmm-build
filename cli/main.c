@@ -16,33 +16,31 @@
  */
 
 #include <jsmn/jsmn.h>
-#include <stb/stb_ds.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 
 #include "args.h"
-#include "arr.h"
-#include "cc.h"
 #include "num.h"
 #include "print.h"
-#include "slice.h"
+#include "str.h"
 #include "sys.h"
+#include "vec.h"
 
 typedef struct {
-    arr(SliceCU8) build_script_srcs;
-    SliceCU8 build_script_exe;
-    SliceCU8 build_script_compile_cmd;
+    vec(StringView) build_script_srcs;
+    StringView build_script_exe;
+    StringView build_script_compile_cmd;
 } ZmmConfig;
 
 static void zmmconfig_free(ZmmConfig* cfg) {
-    for (ptrdiff_t i = 0; i < arrlen(cfg->build_script_srcs); ++i) {
+    for (usize i = 0; i < vecsize(cfg->build_script_srcs); ++i) {
         if (cfg->build_script_srcs[i].ptr) {
             free((void*)cfg->build_script_srcs[i].ptr);
         }
     }
-    arrfree(cfg->build_script_srcs);
+    vecsize(cfg->build_script_srcs);
 
     // Free the standalone strings
     if (cfg->build_script_exe.ptr) {
@@ -56,10 +54,10 @@ static void zmmconfig_free(ZmmConfig* cfg) {
 /**
  * Resolves standard JSON escape sequences into a newly allocated slice.
  */
-static SliceCU8 unescape_json_string(const u8* src, usize len) {
+static StringView unescape_json_string(const char* src, usize len) {
     // The unescaped string will never be longer than the escaped string.
-    u8* dest = malloc(len);
-    if (!dest) return (SliceCU8){0};
+    char* dest = malloc(len);
+    if (!dest) return (StringView){NULL, 0};
 
     usize d = 0;
     for (usize i = 0; i < len; i++) {
@@ -99,7 +97,7 @@ static SliceCU8 unescape_json_string(const u8* src, usize len) {
         }
     }
 
-    return (SliceCU8){.ptr = dest, .len = d};
+    return (StringView){.ptr = dest, .len = d};
 }
 
 /**
@@ -137,22 +135,22 @@ static int jsmn_skip(jsmntok_t* tokens, int count, int i) {
  * @param out_config Pointer to the config struct to populate.
  * @return 0 if successfully parsed, 1 otherwise.
  */
-i32 parse_zmm_config(ZmmConfig* cfg, SliceCU8 jstr) {
-    cfg->build_script_srcs = arrinit;
-    cfg->build_script_exe = NullSliceCU8;
-    cfg->build_script_compile_cmd = NullSliceCU8;
+i32 parse_zmm_config(ZmmConfig* cfg, StringView jstr) {
+    cfg->build_script_srcs = NULL;
+    cfg->build_script_exe = (StringView){NULL, 0};
+    cfg->build_script_compile_cmd = (StringView){NULL, 0};
 
     jsmn_parser p;
     jsmn_init(&p);
 
-    int tok_count = jsmn_parse(&p, (const char*)jstr.ptr, jstr.len, NULL, 0);
+    int tok_count = jsmn_parse(&p, jstr.ptr, jstr.len, NULL, 0);
     if (tok_count < 0) return 1;
 
     jsmntok_t* t = malloc(sizeof(jsmntok_t) * tok_count);
     if (!t) return 1;
 
     jsmn_init(&p);
-    int r = jsmn_parse(&p, (const char*)jstr.ptr, jstr.len, t, tok_count);
+    int r = jsmn_parse(&p, jstr.ptr, jstr.len, t, tok_count);
 
     i32 result = 0;
 
@@ -176,10 +174,10 @@ i32 parse_zmm_config(ZmmConfig* cfg, SliceCU8 jstr) {
                 for (int j = 0; j < array_size && i < r; j++) {
                     if (t[i].type == JSMN_STRING) {
                         // Unescape array elements
-                        SliceCU8 src = unescape_json_string(
+                        StringView src = unescape_json_string(
                             jstr.ptr + t[i].start,
                             (usize)(t[i].end - t[i].start));
-                        arrpush(cfg->build_script_srcs, src);
+                        vecpush(cfg->build_script_srcs, src);
                         i++;
                     } else {
                         i = jsmn_skip(t, r, i);
@@ -188,8 +186,7 @@ i32 parse_zmm_config(ZmmConfig* cfg, SliceCU8 jstr) {
             } else {
                 i = jsmn_skip(t, r, i);
             }
-        } else if (json_token_eq((const char*)jstr.ptr, &t[i],
-                                 "build-script-exe")) {
+        } else if (json_token_eq(jstr.ptr, &t[i], "build-script-exe")) {
             i++;
             if (i < r && t[i].type == JSMN_STRING) {
                 // Unescape exe string
@@ -197,8 +194,7 @@ i32 parse_zmm_config(ZmmConfig* cfg, SliceCU8 jstr) {
                     jstr.ptr + t[i].start, (usize)(t[i].end - t[i].start));
             }
             i++;
-        } else if (json_token_eq((const char*)jstr.ptr, &t[i],
-                                 "build-script-compile-cmd")) {
+        } else if (json_token_eq(jstr.ptr, &t[i], "build-script-compile-cmd")) {
             i++;
             if (i < r && t[i].type == JSMN_STRING) {
                 // Unescape compile command string
@@ -217,25 +213,27 @@ cleanup:
     return result;
 }
 
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+    defined(__NetBSD__)
+// macOS and BSDs use st_mtimespec
+#define GET_MTIME_NSEC(st_ptr) ((st_ptr)->st_mtimespec.tv_nsec)
+#elif defined(__linux__) || defined(__CYGWIN__) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L)
+// Linux and modern POSIX.1-2008 use st_mtim
+#define GET_MTIME_NSEC(st_ptr) ((st_ptr)->st_mtim.tv_nsec)
+#else
+// Safe fallback for older systems that only support second-level precision
+#define GET_MTIME_NSEC(st_ptr) 0
+#endif
+
 // returns true if b is newer than a
 static inline bool is_dirty_stat(const struct stat* a_stat,
                                  const struct stat* b_stat) {
     long a_sec = a_stat->st_mtime;
     long b_sec = b_stat->st_mtime;
 
-#ifdef _WIN32
-    // Windows/MinGW standard stat lacks nanosecond precision
-    long a_nsec = 0;
-    long b_nsec = 0;
-#elif defined(__APPLE__)
-    // macOS and BSD-based systems
-    long a_nsec = a_stat->st_mtimespec.tv_nsec;
-    long b_nsec = b_stat->st_mtimespec.tv_nsec;
-#else
-    // Linux and standard POSIX systems
-    long a_nsec = a_stat->st_mtim.tv_nsec;
-    long b_nsec = b_stat->st_mtim.tv_nsec;
-#endif
+    long a_nsec = GET_MTIME_NSEC(a_stat);
+    long b_nsec = GET_MTIME_NSEC(b_stat);
 
     if (b_sec > a_sec) return true;
     if (a_sec == b_sec && b_nsec > a_nsec) return true;
@@ -243,10 +241,10 @@ static inline bool is_dirty_stat(const struct stat* a_stat,
     return false;
 }
 
-static bool is_dirty(SliceCU8 output, SliceCU8 const* inputs,
+static bool is_dirty(StringView output, const StringView* inputs,
                      usize num_inputs) {
     if (num_inputs == 0) return true;
-    char* out_path = slice_to_cstr(output);
+    char* out_path = zmm_str_vtoc(output);
     struct stat out_stat;
     int out_res = stat(out_path, &out_stat);
     free(out_path);
@@ -254,7 +252,7 @@ static bool is_dirty(SliceCU8 output, SliceCU8 const* inputs,
     if (out_res != 0) return true;
 
     for (usize i = 0; i < num_inputs; ++i) {
-        char* in_path = slice_to_cstr(inputs[i]);
+        char* in_path = zmm_str_vtoc(inputs[i]);
         struct stat in_stat;
         int b_res = stat(in_path, &in_stat);
         free(in_path);
@@ -284,7 +282,7 @@ int main(int argc, char** argv) {
     usize fsize = ftell(cfg_file);
     fseek(cfg_file, 0, SEEK_SET);
 
-    SliceU8 cfg_str = {.ptr = malloc(fsize), .len = fsize};
+    String cfg_str = {.ptr = malloc(fsize), .len = fsize};
     if (!cfg_str.ptr) {
         zmm_printf("Out of Memory (how big is your config file ..?)\n");
         fclose(cfg_file);
@@ -302,7 +300,7 @@ int main(int argc, char** argv) {
     ZmmConfig cfg;
     int return_code = 0;
 
-    i32 out = parse_zmm_config(&cfg, slice_cast(SliceCU8, cfg_str));
+    i32 out = parse_zmm_config(&cfg, zmm_str_stov(cfg_str));
 
     if (out) {
         zmm_printf("Parsing the config file failed :(\n");
@@ -330,10 +328,10 @@ int main(int argc, char** argv) {
     }
 
     bool dirty = is_dirty(cfg.build_script_exe, cfg.build_script_srcs,
-                          arrlenu(cfg.build_script_srcs));
+                          vecsize(cfg.build_script_srcs));
 
     dirty |=
-        is_dirty(cfg.build_script_exe, slicearr(SliceCU8, strlit(".zmm")), 1);
+        is_dirty(cfg.build_script_exe, (StringView[]){zmm_str_ctov(".zmm")}, 1);
 
     if (dirty) {
         zmm_printf("=> Compiling build script...\n");
@@ -342,26 +340,23 @@ int main(int argc, char** argv) {
         // to avoid complex escaping, we just use the shell
         // posix: sh -c "..."
         // win: cmd /c "..."
-        u8 cmd_buf[1024];
-        u8 cmd_ptrbuf[256];
 
         ArgvBuilder cmd;
-        zmm_argv_initbuf(&cmd, cmd_buf, sizeof(cmd_buf), cmd_ptrbuf,
-                         sizeof(cmd_ptrbuf));
+        zmm_argvb_initcap(&cmd, 2048, 32);
 
 #ifdef _WIN32
-        zmm_argv_appendz(&cmd, slicearr(SliceCU8, strlit("cmd"), strlit("/c"),
-                                        NullSliceCU8));
+        zmm_argvb_append(&cmd, zmm_str_ctov("cmd"));
+        zmm_argvb_append(&cmd, zmm_str_ctov("/c"));
 #else
-        zmm_argv_appendz(
-            &cmd, slicearr(SliceCU8, strlit("sh"), strlit("-c"), NullSliceCU8));
+        zmm_argvb_append(&cmd, zmm_str_ctov("sh"));
+        zmm_argvb_append(&cmd, zmm_str_ctov("-c"));
 #endif
 
-        zmm_argv_append(&cmd, cfg.build_script_compile_cmd);
+        zmm_argvb_append(&cmd, cfg.build_script_compile_cmd);
 
-        ChildTerm s = zmm_sys_exec_print(cmd.argv, cmd.num_args);
+        ChildTerm s = zmm_sys_exec_print(cmd.argv, cmd.argv_len);
 
-        zmm_argv_free(&cmd);
+        zmm_argvb_free(&cmd);
 
         if (s.type == TERM_ERROR) {
             zmm_printf("Failed to execute builder command :(\n");
@@ -373,7 +368,7 @@ int main(int argc, char** argv) {
             goto cleanup;
         } else {
             if (s.code) {
-                zmm_printf("Builder command failed :(\n");
+                zmm_printf("Builder command failed (%i32) :(\n", s.code);
                 return_code = 1;
                 goto cleanup;
             }
@@ -384,30 +379,27 @@ int main(int argc, char** argv) {
         zmm_printf("Build script compiled in %u64ms\n", (end - start) / 1000);
     }
 
-    // execute the compiled build script
-    u8 cmd_buf[1024];
-    u8 cmd_ptrbuf[256];
-
     ArgvBuilder cmd;
-    zmm_argv_initbuf(&cmd, cmd_buf, sizeof(cmd_buf), cmd_ptrbuf,
-                     sizeof(cmd_ptrbuf));
+    zmm_argvb_initcap(&cmd, 2048, 32);
+
+    zmm_argvb_pstart(&cmd);
 
 #ifdef _WIN32
-    zmm_argv_pappend(&cmd, strlit(".\\"));
+    zmm_argvb_pappend(&cmd, zmm_str_ctov(".\\"));
 #else
-    zmm_argv_pappend(&cmd, strlit("./"));
+    zmm_argvb_pappend(&cmd, zmm_str_ctov("./"));
 #endif
-    zmm_argv_pappend(&cmd, cfg.build_script_exe);
-    zmm_argv_pfinish(&cmd);
+    zmm_argvb_pappend(&cmd, cfg.build_script_exe);
+    zmm_argvb_pfinish(&cmd);
 
     for (int i = 1; i < argc; i++) {
-        zmm_argv_append(&cmd, (SliceCU8){.ptr = (const u8*)argv[i],
-                                         .len = strlen(argv[i])});
+        zmm_argvb_append(&cmd,
+                         (StringView){.ptr = argv[i], .len = strlen(argv[i])});
     }
 
-    ChildTerm s = zmm_sys_exec_redirect(cmd.argv, cmd.num_args);
+    ChildTerm s = zmm_sys_exec_redirect(cmd.argv, cmd.argv_len);
 
-    zmm_argv_free(&cmd);
+    zmm_argvb_free(&cmd);
 
     if (s.type == TERM_ERROR) {
         zmm_printf("Failed to execute build script executable :(\n");

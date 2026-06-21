@@ -19,16 +19,28 @@
 
 #include <khash/khash.h>
 #include <pthread.h>
-#include <stb/stb_ds.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "arr.h"
 #include "cpu.h"
 #include "str.h"
+#include "vec.h"
+
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+    defined(__NetBSD__)
+// macOS and BSDs use st_mtimespec
+#define GET_MTIME_NSEC(st_ptr) ((st_ptr)->st_mtimespec.tv_nsec)
+#elif defined(__linux__) || defined(__CYGWIN__) || \
+    (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200809L)
+// Linux and modern POSIX.1-2008 use st_mtim
+#define GET_MTIME_NSEC(st_ptr) ((st_ptr)->st_mtim.tv_nsec)
+#else
+// Safe fallback for older systems that only support second-level precision
+#define GET_MTIME_NSEC(st_ptr) 0
+#endif
 
 // --- Constants & Types ---
 
@@ -36,11 +48,10 @@
 #define NODE_FLAG_ALWAYS_DIRTY (1 << 1)
 #define NODE_FLAG_IS_TARGET (1 << 2)
 
-typedef u64 NodeId;
+typedef usize NodeId;
 
 // --- khash Map Implementation ---
 
-// FNV-1 hash implementation for StringView
 static inline khint_t hash_strview(StringView s) {
     khint_t h = 2166136261U;
     for (usize i = 0; i < s.len; ++i) {
@@ -50,61 +61,44 @@ static inline khint_t hash_strview(StringView s) {
     return h;
 }
 
-static inline int eq_strview(StringView a, StringView b) {
-    return zmm_str_eq(a, b);
-}
-
-KHASH_INIT(node_map, StringView, NodeId, 1, hash_strview, eq_strview)
+KHASH_INIT(node_map, StringView, NodeId, 1, hash_strview, zmm_str_eq)
 
 // --- Graph Data Structures ---
 
 typedef struct Node {
     StringView output;
 
-    arr(StringView) sources;
-    arr(StringView) deps;
+    vec(StringView) sources;
+    vec(StringView) deps;
 
-    arr(NodeId) dependents;
-    arr(NodeId) waits_on;
+    vec(NodeId) dependents;
+    vec(NodeId) waits_on;
 
     BuilderFn builder;
-    u8 flags;  // Merged boolean states
+    u8 flags;
 
-    // Planner / Execution state
     bool is_in_subgraph;
     bool eval_visited;
     bool is_dirty;
     _Atomic u32 pending_deps;
 } Node;
 
-struct BuildGraph {
-    Node* nodes;
-    void* node_map;          // khash_t(node_map)*
-    char** internal_allocs;  // Replaces the arena: tracks duplicated strings
-
-    _Atomic u32 remaining_nodes;
-};
-
-struct TargetBuilder {
-    BuildGraph* g;
-    NodeId id;
-};
-
 // --- Task Queue Implementation ---
 
 typedef struct {
     NodeId* buffer;
-    int capacity;
-    int head;
-    int tail;
-    int count;
+    usize capacity;
+    usize head;
+    usize tail;
+    usize count;
     pthread_mutex_t lock;
     pthread_cond_t not_empty;
     bool shutdown;
 } TaskQueue;
 
-static void queue_init(TaskQueue* q, int capacity) {
+static int queue_init(TaskQueue* q, usize capacity) {
     q->buffer = (NodeId*)malloc(capacity * sizeof(NodeId));
+    if (!q->buffer) return 1;
     q->capacity = capacity;
     q->head = 0;
     q->tail = 0;
@@ -112,10 +106,11 @@ static void queue_init(TaskQueue* q, int capacity) {
     q->shutdown = false;
     pthread_mutex_init(&q->lock, NULL);
     pthread_cond_init(&q->not_empty, NULL);
+    return 0;
 }
 
 static void queue_free(TaskQueue* q) {
-    free(q->buffer);
+    if (q->buffer) free(q->buffer);
     pthread_mutex_destroy(&q->lock);
     pthread_cond_destroy(&q->not_empty);
 }
@@ -154,12 +149,13 @@ static void queue_shutdown(TaskQueue* q) {
 
 // --- Internal Memory & String Utilities ---
 
-// Hidden "Arena" mechanism that guarantees all strings are copied
 static StringView bg_dupe_str(BuildGraph* g, StringView v) {
+    if (!v.ptr || v.len == 0) return (StringView){NULL, 0};
     char* ptr = (char*)malloc(v.len + 1);
+    if (!ptr) return (StringView){NULL, 0};
     memcpy(ptr, v.ptr, v.len);
     ptr[v.len] = '\0';
-    arrpush(g->internal_allocs, ptr);  // Track for cleanup
+    vecpush(g->internal_allocs, ptr);
     return (StringView){ptr, v.len};
 }
 
@@ -168,6 +164,7 @@ static _Thread_local char tl_path_buf[MAX_TEMP_PATH];
 
 static inline char* strview_to_temp_cstr(StringView view, bool* out_is_heap) {
     *out_is_heap = false;
+    if (!view.ptr) return NULL;
     char* cstr = tl_path_buf;
     if (view.len < MAX_TEMP_PATH) {
         memcpy(cstr, view.ptr, view.len);
@@ -175,6 +172,7 @@ static inline char* strview_to_temp_cstr(StringView view, bool* out_is_heap) {
     } else {
         *out_is_heap = true;
         cstr = (char*)malloc(view.len + 1);
+        if (!cstr) return NULL;
         memcpy(cstr, view.ptr, view.len);
         cstr[view.len] = '\0';
     }
@@ -184,6 +182,7 @@ static inline char* strview_to_temp_cstr(StringView view, bool* out_is_heap) {
 static inline int stat_strview(StringView path, struct stat* out_stat) {
     bool is_heap;
     char* cstr = strview_to_temp_cstr(path, &is_heap);
+    if (!cstr) return 1;
     int res = stat(cstr, out_stat);
     if (is_heap) free(cstr);
     return res;
@@ -191,32 +190,33 @@ static inline int stat_strview(StringView path, struct stat* out_stat) {
 
 // --- Graph Initialization & Teardown ---
 
-void zmm_bg_init(BuildGraph* g) {
-    g->nodes = arrinit;
+API void zmm_bg_init(BuildGraph* g) {
+    if (!g) return;
+    g->nodes = NULL;
     g->node_map = kh_init(node_map);
-    g->internal_allocs = arrinit;
-    atomic_init(&g->remaining_nodes, 0);
+    g->internal_allocs = NULL;
+    g->remaining_dirty = 0;
 }
 
-void zmm_bg_free(BuildGraph* g) {
+API void zmm_bg_free(BuildGraph* g) {
     if (!g) return;
 
-    for (usize i = 0; i < arrlenu(g->nodes); ++i) {
-        arrfree(g->nodes[i].sources);
-        arrfree(g->nodes[i].deps);
-        arrfree(g->nodes[i].dependents);
-        arrfree(g->nodes[i].waits_on);
+    for (usize i = 0; i < vecsize(g->nodes); ++i) {
+        vecfree(g->nodes[i].sources);
+        vecfree(g->nodes[i].deps);
+        vecfree(g->nodes[i].dependents);
+        vecfree(g->nodes[i].waits_on);
     }
-    arrfree(g->nodes);
+    vecfree(g->nodes);
 
     if (g->node_map) {
         kh_destroy(node_map, (khash_t(node_map)*)g->node_map);
     }
 
-    for (usize i = 0; i < arrlenu(g->internal_allocs); ++i) {
+    for (usize i = 0; i < vecsize(g->internal_allocs); ++i) {
         free(g->internal_allocs[i]);
     }
-    arrfree(g->internal_allocs);
+    vecfree(g->internal_allocs);
 }
 
 static NodeId get_or_put_node(BuildGraph* g, StringView path) {
@@ -229,10 +229,10 @@ static NodeId get_or_put_node(BuildGraph* g, StringView path) {
 
     StringView perm_key = bg_dupe_str(g, path);
 
-    NodeId id = (NodeId)arrlenu(g->nodes);
+    NodeId id = (NodeId)vecsize(g->nodes);
     Node n = {0};
     n.output = perm_key;
-    arrpush(g->nodes, n);
+    vecpush(g->nodes, n);
 
     int ret;
     k = kh_put(node_map, h, perm_key, &ret);
@@ -244,72 +244,79 @@ static NodeId get_or_put_node(BuildGraph* g, StringView path) {
 static void add_dependency_edge(BuildGraph* g, NodeId target_id,
                                 StringView dep_path) {
     NodeId dep_id = get_or_put_node(g, dep_path);
-    arrpush(g->nodes[dep_id].dependents, target_id);
-    arrpush(g->nodes[target_id].waits_on, dep_id);
+    vecpush(g->nodes[dep_id].dependents, target_id);
+    vecpush(g->nodes[target_id].waits_on, dep_id);
 }
 
 // --- Public Graph Addition API ---
 
-void zmm_bg_add(BuildGraph* g, const StringView* sources, usize num_sources,
-                StringView output, const StringView* deps, usize num_deps,
-                BuilderFn builder, bool always_dirty) {
+API int zmm_bg_add(BuildGraph* g, const StringView* sources, usize num_sources,
+                   StringView output, const StringView* deps, usize num_deps,
+                   BuilderFn builder, bool always_dirty) {
     TargetBuilder tg;
     zmm_tg_init(&tg, g, output);
     zmm_tg_set_builder(&tg, builder);
     if (always_dirty) zmm_tg_set_always_dirty(&tg);
-    zmm_tg_add_src(&tg, sources, num_sources);
-    zmm_tg_add_dep(&tg, deps, num_deps);
+    if (zmm_tg_add_src(&tg, sources, num_sources)) return 1;
+    if (num_deps > 0 && zmm_tg_add_dep(&tg, deps, num_deps) != 0) return 1;
+
+    return 0;
 }
 
-void zmm_bg_add_phony(BuildGraph* g, const StringView* sources,
-                      usize num_sources, StringView output,
-                      const StringView* deps, usize num_deps, BuilderFn builder,
-                      bool always_dirty) {
-    zmm_bg_add(g, sources, num_sources, output, deps, num_deps, builder,
-               always_dirty);
+API int zmm_bg_add_phony(BuildGraph* g, const StringView* sources,
+                         usize num_sources, StringView output,
+                         const StringView* deps, usize num_deps,
+                         BuilderFn builder, bool always_dirty) {
+    if (zmm_bg_add(g, sources, num_sources, output, deps, num_deps, builder,
+                   always_dirty)) {
+        return 1;
+    }
+
     g->nodes[get_or_put_node(g, output)].flags |= NODE_FLAG_PHONY;
+    return 0;
 }
 
 // --- TargetBuilder API ---
 
-void zmm_tg_init(TargetBuilder* tg, BuildGraph* g, StringView output) {
+API void zmm_tg_init(TargetBuilder* tg, BuildGraph* g, StringView output) {
+    if (!tg || !g) return;
     NodeId id = get_or_put_node(g, output);
     g->nodes[id].flags |= NODE_FLAG_IS_TARGET;
     tg->g = g;
     tg->id = id;
 }
 
-void zmm_tg_init_phony(TargetBuilder* tg, BuildGraph* g, StringView output) {
-    zmm_tg_init(tg, g, output);
-    g->nodes[tg->id].flags |= NODE_FLAG_PHONY;
-}
-
-void zmm_tg_set_builder(TargetBuilder* tg, BuilderFn builder) {
+API void zmm_tg_set_builder(TargetBuilder* tg, BuilderFn builder) {
     tg->g->nodes[tg->id].builder = builder;
 }
 
-void zmm_tg_set_phony(TargetBuilder* tg) {
+API void zmm_tg_set_phony(TargetBuilder* tg) {
     tg->g->nodes[tg->id].flags |= NODE_FLAG_PHONY;
 }
 
-void zmm_tg_set_always_dirty(TargetBuilder* tg) {
+API void zmm_tg_set_always_dirty(TargetBuilder* tg) {
     tg->g->nodes[tg->id].flags |= NODE_FLAG_ALWAYS_DIRTY;
 }
 
-void zmm_tg_add_src(TargetBuilder* tb, const StringView* sources, usize count) {
+API int zmm_tg_add_src(TargetBuilder* tb, const StringView* sources,
+                       usize count) {
     for (usize i = 0; i < count; ++i) {
         StringView duped = bg_dupe_str(tb->g, sources[i]);
-        arrpush(tb->g->nodes[tb->id].sources, duped);
+        if (!duped.ptr) return 1;  // Allocation failure
+        vecpush(tb->g->nodes[tb->id].sources, duped);
         add_dependency_edge(tb->g, tb->id, sources[i]);
     }
+    return 0;
 }
 
-void zmm_tg_add_dep(TargetBuilder* tb, const StringView* deps, usize count) {
+API int zmm_tg_add_dep(TargetBuilder* tb, const StringView* deps, usize count) {
     for (usize i = 0; i < count; ++i) {
         StringView duped = bg_dupe_str(tb->g, deps[i]);
-        arrpush(tb->g->nodes[tb->id].deps, duped);
+        if (!duped.ptr) return 1;  // Allocation failure
+        vecpush(tb->g->nodes[tb->id].deps, duped);
         add_dependency_edge(tb->g, tb->id, deps[i]);
     }
+    return 0;
 }
 
 // --- Phase 1: Planning / Dirty Checking ---
@@ -319,24 +326,14 @@ static inline bool is_dirty_stat(const struct stat* a_stat,
     long a_sec = a_stat->st_mtime;
     long b_sec = b_stat->st_mtime;
 
-#ifdef _WIN32
-    long a_nsec = 0;
-    long b_nsec = 0;
-#elif defined(__APPLE__)
-    long a_nsec = a_stat->st_mtimespec.tv_nsec;
-    long b_nsec = b_stat->st_mtimespec.tv_nsec;
-#else
-    // Linux and standard POSIX systems
-    long a_nsec = a_stat->st_mtimensec;
-    long b_nsec = b_stat->st_mtimensec;
-#endif
+    long a_nsec = GET_MTIME_NSEC(a_stat);
+    long b_nsec = GET_MTIME_NSEC(b_stat);
 
     if (b_sec > a_sec) return true;
     if (a_sec == b_sec && b_nsec > a_nsec) return true;
     return false;
 }
 
-// Recursively evaluate dirty state (Bottom-Up)
 static bool eval_node_dirty(BuildGraph* g, NodeId id) {
     Node* n = &g->nodes[id];
     if (n->eval_visited) return n->is_dirty;
@@ -344,15 +341,13 @@ static bool eval_node_dirty(BuildGraph* g, NodeId id) {
 
     bool dirty = false;
 
-    // 1. Check Always Dirty
     if (n->flags & NODE_FLAG_ALWAYS_DIRTY) {
         dirty = true;
     }
 
-    // 2. Evaluate all dependencies first
-    for (usize i = 0; i < arrlenu(n->waits_on); ++i) {
+    for (usize i = 0; i < vecsize(n->waits_on); ++i) {
         if (eval_node_dirty(g, n->waits_on[i])) {
-            dirty = true;  // Bubble up dirty state
+            dirty = true;
         }
     }
 
@@ -361,21 +356,18 @@ static bool eval_node_dirty(BuildGraph* g, NodeId id) {
         return true;
     }
 
-    // 3. If it's a Phony target and dependencies were clean, it stays clean
     if (n->flags & NODE_FLAG_PHONY) {
         n->is_dirty = false;
         return false;
     }
 
-    // 4. Standard File Stat checks
     struct stat out_stat;
     if (stat_strview(n->output, &out_stat) != 0) {
-        n->is_dirty = true;  // Output doesn't exist
+        n->is_dirty = true;
         return true;
     }
 
-    // Check Sources
-    for (usize i = 0; i < arrlenu(n->sources); ++i) {
+    for (usize i = 0; i < vecsize(n->sources); ++i) {
         struct stat in_stat;
         if (stat_strview(n->sources[i], &in_stat) != 0 ||
             is_dirty_stat(&out_stat, &in_stat)) {
@@ -384,8 +376,7 @@ static bool eval_node_dirty(BuildGraph* g, NodeId id) {
         }
     }
 
-    // Check Deps
-    for (usize i = 0; i < arrlenu(n->deps); ++i) {
+    for (usize i = 0; i < vecsize(n->deps); ++i) {
         struct stat in_stat;
         if (stat_strview(n->deps[i], &in_stat) != 0 ||
             is_dirty_stat(&out_stat, &in_stat)) {
@@ -400,59 +391,54 @@ static bool eval_node_dirty(BuildGraph* g, NodeId id) {
 
 static void plan_subgraph(BuildGraph* g, NodeId start_id) {
     NodeId* stack = NULL;
-    arrpush(stack, start_id);
+    vecpush(stack, start_id);
 
-    while (arrlen(stack) > 0) {
-        NodeId id = arrpop(stack);
+    while (vecsize(stack) > 0) {
+        NodeId id = vecpop(stack);
         Node* n = &g->nodes[id];
 
         if (n->is_in_subgraph) continue;
         n->is_in_subgraph = true;
 
-        for (usize i = 0; i < arrlenu(n->waits_on); ++i) {
+        for (usize i = 0; i < vecsize(n->waits_on); ++i) {
             if (!g->nodes[n->waits_on[i]].is_in_subgraph) {
-                arrpush(stack, n->waits_on[i]);
+                vecpush(stack, n->waits_on[i]);
             }
         }
     }
-    arrfree(stack);
+    vecfree(stack);
 }
 
-int zmm_bg_prepare(BuildGraph* g, const StringView* targets,
-                   usize num_targets) {
+API int zmm_bg_prepare(BuildGraph* g, const StringView* targets,
+                       usize num_targets) {
     khash_t(node_map)* h = (khash_t(node_map)*)g->node_map;
 
-    // Reset state
-    for (usize i = 0; i < arrlenu(g->nodes); ++i) {
+    for (usize i = 0; i < vecsize(g->nodes); ++i) {
         g->nodes[i].is_in_subgraph = false;
         g->nodes[i].eval_visited = false;
         g->nodes[i].is_dirty = false;
         atomic_store(&g->nodes[i].pending_deps, 0);
     }
 
-    // 1. Mark subgraph
     for (usize i = 0; i < num_targets; ++i) {
         khint_t k = kh_get(node_map, h, targets[i]);
-        if (k == kh_end(h)) return -1;  // Target not found
+        if (k == kh_end(h)) return -1;
         plan_subgraph(g, kh_val(h, k));
     }
 
-    // 2. Evaluate dirty state bottom-up
-    for (usize i = 0; i < arrlenu(g->nodes); ++i) {
+    for (usize i = 0; i < vecsize(g->nodes); ++i) {
         if (g->nodes[i].is_in_subgraph) {
             eval_node_dirty(g, (NodeId)i);
         }
     }
 
-    // 3. Setup execution plan (Only tracking dirty nodes waiting on dirty
-    // dependencies)
-    u32 total_dirty = 0;
-    for (usize i = 0; i < arrlenu(g->nodes); ++i) {
+    usize total_dirty = 0;
+    for (usize i = 0; i < vecsize(g->nodes); ++i) {
         Node* n = &g->nodes[i];
         if (n->is_in_subgraph && n->is_dirty) {
             total_dirty++;
             u32 p_deps = 0;
-            for (usize j = 0; j < arrlenu(n->waits_on); ++j) {
+            for (usize j = 0; j < vecsize(n->waits_on); ++j) {
                 if (g->nodes[n->waits_on[j]].is_dirty) {
                     p_deps++;
                 }
@@ -461,13 +447,13 @@ int zmm_bg_prepare(BuildGraph* g, const StringView* targets,
         }
     }
 
-    atomic_store(&g->remaining_nodes, total_dirty);
+    g->remaining_dirty = total_dirty;
     return 0;
 }
 
 // --- Phase 2: Querying ---
 
-bool zmm_bg_is_dirty(BuildGraph* g, StringView target) {
+API bool zmm_bg_is_dirty(BuildGraph* g, StringView target) {
     khash_t(node_map)* h = (khash_t(node_map)*)g->node_map;
     khint_t k = kh_get(node_map, h, target);
     if (k == kh_end(h)) return false;
@@ -490,57 +476,61 @@ static void* worker_fn(void* arg) {
     NodeId node_id;
 
     while (queue_pop(ctx->queue, &node_id)) {
+        // If an error occurred elsewhere, drain the queue without executing
         if (atomic_load_explicit(ctx->has_error, memory_order_acquire)) {
-            u32 rem = atomic_fetch_sub(&ctx->graph->remaining_nodes, 1);
-            if (rem == 1) {
-                pthread_mutex_lock(ctx->done_lock);
-                pthread_cond_signal(ctx->done_cond);
-                pthread_mutex_unlock(ctx->done_lock);
-            }
             continue;
         }
 
         Node* node = &ctx->graph->nodes[node_id];
+        int res = 0;
 
         // Execute the node's builder if it's a target
         if ((node->flags & NODE_FLAG_IS_TARGET) && node->builder) {
-            int res = node->builder(node->sources, arrlenu(node->sources),
-                                    node->output);
-            if (res != 0) {
-                atomic_store_explicit(ctx->has_error, true,
-                                      memory_order_release);
-            }
+            res = node->builder(node->sources, vecsize(node->sources),
+                                node->output);
         }
 
-        // Notify dirty dependents
-        for (usize i = 0; i < arrlenu(node->dependents); ++i) {
+        if (res != 0) {
+            // Signal global failure
+            atomic_store_explicit(ctx->has_error, true, memory_order_release);
+
+            // Wake up main thread immediately to abort
+            pthread_mutex_lock(ctx->done_lock);
+            pthread_cond_broadcast(ctx->done_cond);
+            pthread_mutex_unlock(ctx->done_lock);
+            continue;
+        }
+
+        // Notify dirty dependents (Success Path)
+        for (usize i = 0; i < vecsize(node->dependents); ++i) {
             NodeId dep_id = node->dependents[i];
             Node* dep_node = &ctx->graph->nodes[dep_id];
 
             if (dep_node->is_in_subgraph && dep_node->is_dirty) {
                 u32 prev = atomic_fetch_sub(&dep_node->pending_deps, 1);
-                if (prev == 1) {  // We were the last dirty dependency
+                if (prev == 1) {
                     queue_push(ctx->queue, dep_id);
                 }
             }
         }
 
-        u32 rem = atomic_fetch_sub(&ctx->graph->remaining_nodes, 1);
-        if (rem == 1) {
-            pthread_mutex_lock(ctx->done_lock);
-            pthread_cond_signal(ctx->done_cond);
-            pthread_mutex_unlock(ctx->done_lock);
+        // Decrement remaining global tasks
+        pthread_mutex_lock(ctx->done_lock);
+        ctx->graph->remaining_dirty--;
+        if (ctx->graph->remaining_dirty == 0) {
+            pthread_cond_broadcast(ctx->done_cond);
         }
+        pthread_mutex_unlock(ctx->done_lock);
     }
     return NULL;
 }
 
-int zmm_bg_exec(BuildGraph* g) {
-    u32 total_nodes = atomic_load(&g->remaining_nodes);
+API int zmm_bg_exec(BuildGraph* g) {
+    usize total_nodes = g->remaining_dirty;
     if (total_nodes == 0) return 0;  // Everything is clean
 
     TaskQueue queue;
-    queue_init(&queue, total_nodes);
+    if (queue_init(&queue, total_nodes) != 0) return -1;
 
     _Atomic bool has_error;
     atomic_init(&has_error, false);
@@ -551,8 +541,17 @@ int zmm_bg_exec(BuildGraph* g) {
     pthread_cond_init(&done_cond, NULL);
 
     u32 num_threads = zmm_cpu_thread_count();
+    if (num_threads == 0) num_threads = 1;  // Fallback
+
     pthread_t* threads = (pthread_t*)malloc(num_threads * sizeof(pthread_t));
     WorkerCtx* ctxs = (WorkerCtx*)malloc(num_threads * sizeof(WorkerCtx));
+
+    if (!threads || !ctxs) {
+        if (threads) free(threads);
+        if (ctxs) free(ctxs);
+        queue_free(&queue);
+        return 1;
+    }
 
     for (u32 i = 0; i < num_threads; ++i) {
         ctxs[i] = (WorkerCtx){.graph = g,
@@ -564,7 +563,7 @@ int zmm_bg_exec(BuildGraph* g) {
     }
 
     // Seed the queue with dirty leaf nodes
-    for (usize i = 0; i < arrlenu(g->nodes); ++i) {
+    for (usize i = 0; i < vecsize(g->nodes); ++i) {
         Node* n = &g->nodes[i];
         if (n->is_in_subgraph && n->is_dirty &&
             atomic_load(&n->pending_deps) == 0) {
@@ -572,13 +571,17 @@ int zmm_bg_exec(BuildGraph* g) {
         }
     }
 
+    // Wait for completion OR error abort
     pthread_mutex_lock(&done_lock);
-    while (atomic_load(&g->remaining_nodes) > 0) {
+    while (g->remaining_dirty > 0 && !atomic_load(&has_error)) {
         pthread_cond_wait(&done_cond, &done_lock);
     }
     pthread_mutex_unlock(&done_lock);
 
+    // Shutdown queue to flush remaining tasks and unblock workers waiting on
+    // pop
     queue_shutdown(&queue);
+
     for (u32 i = 0; i < num_threads; ++i) {
         pthread_join(threads[i], NULL);
     }
@@ -589,5 +592,5 @@ int zmm_bg_exec(BuildGraph* g) {
     pthread_cond_destroy(&done_cond);
     queue_free(&queue);
 
-    return atomic_load(&has_error) ? -1 : 0;
+    return atomic_load(&has_error) ? 1 : 0;
 }

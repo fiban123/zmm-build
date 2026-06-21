@@ -17,31 +17,15 @@
 
 #include <zmm/zmm.h>
 
-// *** config ***
-
-// Combined base compilation flags
-#define CONF_CFLAGS                        \
-    {strlit("-std=gnu23"),                 \
-     strlit("-fPIC"),                      \
-     strlit("-fdiagnostics-color=always"), \
-     strlit("-Iinclude/"),                 \
-     strlit("-Iextern/"),                  \
-     strlit("-DBUILDING_SO"),              \
-     NullSliceCU8}
-
-// -ffast these flags are added when -ffast is used
-#define CONF_CFLAGS_FAST {strlit("-O3"), NullSliceCU8}
-// not -ffast these flags are added when -ffast is not used
-#define CONF_CFLAGS_DEBUG {strlit("-O0"), strlit("-ggdb3"), NullSliceCU8}
-
-// -fsan these flags are added when -fsan is used
-#define CONF_FLAGS_SAN \
-    {strlit("-fsanitize=address"), strlit("-fsanitize=undefined"), NullSliceCU8}
+const StringView BASE_CFLAGS[] = {
+    strv("-std=gnu23"), strv("-fPIC"),     strv("-fdiagnostics-color=always"),
+    strv("-Iinclude/"), strv("-Iextern/"), strv("-DBUILDING_SO"),
+};
 
 ArgvBuilder cflags;
 ArgvBuilder ldflags;
 
-SliceCU8 so_libs[] = {strlit("-lcpu_features"), NullSliceCU8};
+const StringView so_libs[] = {strlit("-lcpu_features"), NullSliceCU8};
 SliceCU8 exe_libs[] = {strlit("-lzmm"), NullSliceCU8};
 
 SliceCU8 cc = strlit("clang");
@@ -274,7 +258,6 @@ int main(int argc, char** argv) {
     slicearr_free(lib_srcs);
     zmm_args_free(&args);
     zmm_bg_free(&bg);
-
 
     return exit_code;
 }

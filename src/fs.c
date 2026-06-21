@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,7 +19,6 @@
 
 #include <dirent.h>
 #include <errno.h>
-#include <stb/stb_ds.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -32,7 +31,7 @@
 
 #include "path.h"
 #include "print.h"
-#include "slice.h"
+#include "vec.h"
 
 static char* path_join(const char* dir, const char* file) {
     usize dlen = strlen(dir);
@@ -47,35 +46,27 @@ static char* path_join(const char* dir, const char* file) {
     return out;
 }
 
-static inline bool matches_kinds(FindKind kind, const FindKind* targets) {
-    if (!targets || targets[0] == 0) return true;
-    for (usize i = 0; targets[i] != 0; i++) {
-        if (kind == targets[i]) return true;
-    }
-    return false;
-}
-
-static i32 find_append_recursive(arr(SliceU8) * out, const char* current_path,
+static int find_append_recursive(vec(String) * out, const char* current_path,
                                  FindOpts opts) {
     DIR* dir = opendir(current_path);
-    SliceCU8 cur_slice_c = {.ptr = (const u8*)current_path,
-                            .len = strlen(current_path)};
+    StringView cur_sv = zmm_str_ctov(current_path);
 
     if (!dir) {
         // Bonus Feature: The root is actually a specific file!
         struct stat st;
         if (stat(current_path, &st) == 0 && S_ISREG(st.st_mode)) {
-            if (!matches_kinds(FK_FILE, opts.kinds)) return 0;
-            if (opts.ignore_hidden && zmm_p_is_hidden(cur_slice_c)) return 0;
-            if (opts.exts && opts.exts[0].ptr != NULL &&
-                !zmm_p_has_exts(cur_slice_c, opts.exts))
-                return 0;
+            if (opts.kind != FK_FILE) return 0;
+            if (opts.ignore_hidden && zmm_p_is_hidden(cur_sv)) return 0;
+
+            // Extension filtering logic
+            if (opts.ext.ptr != NULL && opts.ext.len > 0) {
+                if (!zmm_p_has_ext(cur_sv, opts.ext)) return 0;
+            }
 
             char* trimmed_root = strdup(current_path);
-            SliceU8 slice = {.ptr = (u8*)trimmed_root,
-                             .len = strlen(trimmed_root)};
-            zmm_p_normalize_sep(slice);
-            arrpush(*out, slice);
+            String str = {trimmed_root, strlen(trimmed_root)};
+            zmm_p_normalize_sep(str);
+            vecpush(*out, str);
         }
         return 0;
     }
@@ -85,16 +76,15 @@ static i32 find_append_recursive(arr(SliceU8) * out, const char* current_path,
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
 
-        SliceCU8 entry_slice_c = {.ptr = (const u8*)entry->d_name,
-                                  .len = strlen(entry->d_name)};
+        StringView entry_sv = zmm_str_ctov(entry->d_name);
 
-        if (opts.ignore_hidden && zmm_p_is_hidden(entry_slice_c)) {
+        if (opts.ignore_hidden && zmm_p_is_hidden(entry_sv)) {
             continue;
         }
 
         char* full_path = path_join(current_path, entry->d_name);
-        SliceU8 full_slice = {.ptr = (u8*)full_path, .len = strlen(full_path)};
-        zmm_p_normalize_sep(full_slice);
+        String full_str = {full_path, strlen(full_path)};
+        zmm_p_normalize_sep(full_str);
 
         // Determine Kind using universally supported `stat`
         FindKind kind = FK_FILE;
@@ -106,23 +96,23 @@ static i32 find_append_recursive(arr(SliceU8) * out, const char* current_path,
         }
 
         bool match = true;
-        if (!matches_kinds(kind, opts.kinds)) match = false;
+        if (kind != opts.kind) match = false;
 
         // Extension filtering logic
-        if (opts.exts && opts.exts[0].ptr != NULL) {
+        if (opts.ext.ptr != NULL && opts.ext.len > 0) {
             if (kind == FK_DIRECTORY) {
                 // Directories automatically fail the match if specific
                 // extensions are requested
                 match = false;
-            } else if (!zmm_p_has_exts(entry_slice_c, opts.exts)) {
+            } else if (!zmm_p_has_ext(entry_sv, opts.ext)) {
                 match = false;
             }
         }
 
         if (match) {
             char* saved_path = strdup(full_path);
-            SliceU8 slice = {.ptr = (u8*)saved_path, .len = strlen(saved_path)};
-            arrpush(*out, slice);
+            String str = {saved_path, strlen(saved_path)};
+            vecpush(*out, str);
         }
 
         // Because of the early exit above, hidden directories will never reach
@@ -138,28 +128,18 @@ static i32 find_append_recursive(arr(SliceU8) * out, const char* current_path,
     return 0;
 }
 
-i32 zmm_fs_find(arr(SliceU8) * out, const SliceCU8* roots, FindOpts opts) {
-    if (!out || !roots) return -1;
-
-    for (usize i = 0; roots[i].ptr != NULL; i++) {
-        SliceCU8 root = roots[i];
-
-        char* null_root = malloc(root.len + 1);
-        memcpy(null_root, root.ptr, root.len);
-        null_root[root.len] = '\0';
-
-        find_append_recursive(out, null_root, opts);
-
-        free(null_root);
-    }
+API int zmm_fs_find(vec(String) * out, StringView root, FindOpts opts) {
+    char* null_root = zmm_str_vtoc(root);
+    find_append_recursive(out, null_root, opts);
+    free(null_root);
 
     return 0;
 }
 
 // Equivalent to `mkdir -p`
-i32 zmm_fs_create_dir_path(SliceCU8 path) {
-    char* tmp = slice_to_cstr(path);
-    if (!tmp) return -1;
+API int zmm_fs_create_dir_path(StringView path) {
+    char* tmp = zmm_str_vtoc(path);
+    if (!tmp) return 1;
 
     // Normalize to forward slashes for the iteration logic
     for (char* p = tmp; *p; p++) {
@@ -181,18 +161,18 @@ i32 zmm_fs_create_dir_path(SliceCU8 path) {
 
     // Create the final leaf directory
 #if defined(_WIN32)
-    i32 res = (mkdir(tmp) != 0 && errno != EEXIST) ? -1 : 0;
+    int res = (mkdir(tmp) != 0 && errno != EEXIST) ? 1 : 0;
 #else
-    i32 res = (mkdir(tmp, 0755) != 0 && errno != EEXIST) ? -1 : 0;
+    int res = (mkdir(tmp, 0755) != 0 && errno != EEXIST) ? 1 : 0;
 #endif
 
     free(tmp);
     return res;
 }
 
-i32 zmm_fs_create_parent_path(SliceCU8 path) {
-    char* tmp = slice_to_cstr(path);
-    if (!tmp) return -1;
+API int zmm_fs_create_parent_path(StringView path) {
+    char* tmp = zmm_str_vtoc(path);
+    if (!tmp) return 1;
 
     // Find the last separator to slice off the file name
     char* last_slash = NULL;
@@ -202,10 +182,10 @@ i32 zmm_fs_create_parent_path(SliceCU8 path) {
         }
     }
 
-    i32 res = 0;
+    int res = 0;
     if (last_slash) {
         *last_slash = '\0';  // Truncate at the last slash
-        SliceCU8 dir_slice = {.ptr = (const u8*)tmp, .len = strlen(tmp)};
+        StringView dir_slice = zmm_str_ctov(tmp);
         res = zmm_fs_create_dir_path(dir_slice);
     }
 
@@ -213,8 +193,8 @@ i32 zmm_fs_create_parent_path(SliceCU8 path) {
     return res;
 }
 
-bool zmm_fs_file_exists(SliceCU8 path) {
-    char* cstr = slice_to_cstr(path);
+API bool zmm_fs_file_exists(StringView path) {
+    char* cstr = zmm_str_vtoc(path);
     if (!cstr) return false;
 
 #if defined(_WIN32)
@@ -227,32 +207,32 @@ bool zmm_fs_file_exists(SliceCU8 path) {
     return exists;
 }
 
-i32 zmm_fs_delete_file(SliceCU8 path) {
+API int zmm_fs_delete_file(StringView path) {
     zmm_lprintf("Deleting file %s\n", path);
     zmm_lemit();
 
-    char* cstr = slice_to_cstr(path);
-    if (!cstr) return -1;
+    char* cstr = zmm_str_vtoc(path);
+    if (!cstr) return 1;
 
-    i32 res = 0;
+    int res = 0;
     if (remove(cstr) != 0 && errno != ENOENT) {
-        res = -1;
+        res = 1;
     }
 
     free(cstr);
     return res;
 }
 
-i32 zmm_fs_delete_dir(SliceCU8 path) {
+API int zmm_fs_delete_dir(StringView path) {
     zmm_lprintf("Deleting directory %s\n", path);
     zmm_lemit();
 
-    char* cstr = slice_to_cstr(path);
-    if (!cstr) return -1;
+    char* cstr = zmm_str_vtoc(path);
+    if (!cstr) return 1;
 
-    i32 res = 0;
+    int res = 0;
     if (rmdir(cstr) != 0 && errno != ENOENT) {
-        res = -1;
+        res = 1;
     }
 
     free(cstr);
@@ -278,35 +258,35 @@ static i32 delete_tree_cstr(const char* path) {
     closedir(dir);
 
     // Now that the directory is empty, delete the directory itself
-    return (rmdir(path) != 0 && errno != ENOENT) ? -1 : 0;
+    return (rmdir(path) != 0 && errno != ENOENT) ? 1 : 0;
 }
 
-i32 zmm_fs_delete_tree(SliceCU8 path) {
+API int zmm_fs_delete_tree(StringView path) {
     zmm_lprintf("Deleting tree %s\n", path);
     zmm_lemit();
 
-    char* cstr = slice_to_cstr(path);
-    if (!cstr) return -1;
+    char* cstr = zmm_str_vtoc(path);
+    if (!cstr) return 1;
 
-    i32 res = delete_tree_cstr(cstr);
+    int res = delete_tree_cstr(cstr);
 
     free(cstr);
     return res;
 }
 
-static i32 copy_file_cstr(const char* src, const char* dst) {
+static int copy_file_cstr(const char* src, const char* dst) {
     FILE* in = fopen(src, "rb");
-    if (!in) return -1;
+    if (!in) return 1;
 
     FILE* out = fopen(dst, "wb");
     if (!out) {
         fclose(in);
-        return -1;
+        return 1;
     }
 
     char buf[BUFSIZ];
     size_t n;
-    i32 res = 0;
+    int res = 0;
 
     while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
         if (fwrite(buf, 1, n, out) != n) {
@@ -334,23 +314,23 @@ static i32 copy_file_cstr(const char* src, const char* dst) {
 #endif
         } else {
             // If stat fails, we still copied the data, but metadata failed
-            res = -1;
+            res = 1;
         }
     }
 
     return res;
 }
 
-static i32 copy_dir_cstr(const char* src, const char* dst) {
+static int copy_dir_cstr(const char* src, const char* dst) {
     // Ensure destination directory exists
-    SliceCU8 dst_slice = {.ptr = (const u8*)dst, .len = strlen(dst)};
+    StringView dst_slice = zmm_str_ctov(dst);
     zmm_fs_create_dir_path(dst_slice);
 
     DIR* dir = opendir(src);
-    if (!dir) return -1;
+    if (!dir) return 1;
 
     struct dirent* entry;
-    i32 res = 0;
+    int res = 0;
 
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
@@ -363,7 +343,7 @@ static i32 copy_dir_cstr(const char* src, const char* dst) {
         // Shallow copy: only copy regular files
         if (stat(src_path, &st) == 0 && S_ISREG(st.st_mode)) {
             if (copy_file_cstr(src_path, dst_path) != 0) {
-                res = -1;
+                res = 1;
             }
         }
 
@@ -375,22 +355,22 @@ static i32 copy_dir_cstr(const char* src, const char* dst) {
     return res;
 }
 
-static i32 copy_tree_cstr(const char* src, const char* dst) {
+static int copy_tree_cstr(const char* src, const char* dst) {
     struct stat st;
-    if (stat(src, &st) != 0) return -1;
+    if (stat(src, &st) != 0) return 1;
 
     if (S_ISREG(st.st_mode)) {
         return copy_file_cstr(src, dst);
     } else if (S_ISDIR(st.st_mode)) {
         // Ensure destination directory exists
-        SliceCU8 dst_slice = {.ptr = (const u8*)dst, .len = strlen(dst)};
+        StringView dst_slice = zmm_str_ctov(dst);
         zmm_fs_create_dir_path(dst_slice);
 
         DIR* dir = opendir(src);
-        if (!dir) return -1;
+        if (!dir) return 1;
 
         struct dirent* entry;
-        i32 res = 0;
+        int res = 0;
 
         while ((entry = readdir(dir)) != NULL) {
             if (strcmp(entry->d_name, ".") == 0 ||
@@ -402,7 +382,7 @@ static i32 copy_tree_cstr(const char* src, const char* dst) {
 
             // Recurse into files and directories
             if (copy_tree_cstr(src_path, dst_path) != 0) {
-                res = -1;
+                res = 1;
             }
 
             free(src_path);
@@ -413,62 +393,62 @@ static i32 copy_tree_cstr(const char* src, const char* dst) {
         return res;
     }
 
-    return -1;  // Not a regular file or directory
+    return 1;  // Not a regular file or directory
 }
 
-// --- Public Slice API ---
+// --- Public API ---
 
-i32 zmm_fs_copy_file(SliceCU8 src, SliceCU8 dst) {
+API int zmm_fs_copy_file(StringView src, StringView dst) {
     zmm_lprintf("Copying file %s to %s\n", src, dst);
     zmm_lemit();
 
-    char* src_cstr = slice_to_cstr(src);
-    char* dst_cstr = slice_to_cstr(dst);
+    char* src_cstr = zmm_str_vtoc(src);
+    char* dst_cstr = zmm_str_vtoc(dst);
 
     if (!src_cstr || !dst_cstr) {
         free(src_cstr);
         free(dst_cstr);
-        return -1;
+        return 1;
     }
 
-    i32 res = copy_file_cstr(src_cstr, dst_cstr);
+    int res = copy_file_cstr(src_cstr, dst_cstr);
 
     free(src_cstr);
     free(dst_cstr);
     return res;
 }
 
-i32 zmm_fs_copy_dir(SliceCU8 src, SliceCU8 dst) {
+API int zmm_fs_copy_dir(StringView src, StringView dst) {
     zmm_lprintf("Copying directory %s to %s\n", src, dst);
     zmm_lemit();
 
-    char* src_cstr = slice_to_cstr(src);
-    char* dst_cstr = slice_to_cstr(dst);
+    char* src_cstr = zmm_str_vtoc(src);
+    char* dst_cstr = zmm_str_vtoc(dst);
 
     if (!src_cstr || !dst_cstr) {
         free(src_cstr);
         free(dst_cstr);
-        return -1;
+        return 1;
     }
 
-    i32 res = copy_dir_cstr(src_cstr, dst_cstr);
+    int res = copy_dir_cstr(src_cstr, dst_cstr);
 
     free(src_cstr);
     free(dst_cstr);
     return res;
 }
 
-i32 zmm_fs_copy_tree(SliceCU8 src, SliceCU8 dst) {
+API int zmm_fs_copy_tree(StringView src, StringView dst) {
     zmm_lprintf("Copying tree %s to %s\n", src, dst);
     zmm_lemit();
 
-    char* src_cstr = slice_to_cstr(src);
-    char* dst_cstr = slice_to_cstr(dst);
+    char* src_cstr = zmm_str_vtoc(src);
+    char* dst_cstr = zmm_str_vtoc(dst);
 
     if (!src_cstr || !dst_cstr) {
         free(src_cstr);
         free(dst_cstr);
-        return -1;
+        return 1;
     }
 
     i32 res = copy_tree_cstr(src_cstr, dst_cstr);
@@ -478,24 +458,23 @@ i32 zmm_fs_copy_tree(SliceCU8 src, SliceCU8 dst) {
     return res;
 }
 
-SliceU8 zmm_fs_abs_cwd(void) {
+API String zmm_fs_abs_cwd(void) {
     char buf[4096];
     if (getcwd(buf, sizeof(buf)) != NULL) {
-        char* heap_path = strdup(buf);
-        return (SliceU8){.ptr = (u8*)heap_path, .len = strlen(heap_path)};
+        return zmm_str_ctos(buf);
     }
-    return NullSliceU8;
+    return (String){NULL, 0};
 }
 
-i32 zmm_fs_change_cwd(SliceCU8 path) {
-    char* path_nul = slice_to_cstr(path);
-    if (!path_nul) return -1;
+API int zmm_fs_change_cwd(StringView path) {
+    char* path_nul = zmm_str_vtoc(path);
+    if (!path_nul) return 1;
 
     if (chdir(path_nul) == 0) {
         free(path_nul);
         return 0;
     } else {
         free(path_nul);
-        return -1;
+        return 1;
     }
 }

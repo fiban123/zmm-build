@@ -17,8 +17,8 @@
 
 #pragma once
 
-#include "arr.h"
 #include "export.h"
 #include "str.h"
+#include "vec.h"
 
-API i32 zmm_dep_parse(arr(String) * deps, StringView path);
+API i32 zmm_dep_parse(vec(String) * deps, StringView path);

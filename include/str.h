@@ -21,7 +21,6 @@
 #include <string.h>
 
 #include "num.h"
-#include "stb/stb_ds.h"
 
 typedef struct {
     char* ptr;
@@ -41,8 +40,8 @@ static inline StringView zmm_str_ctov(const char* cstr) {
 static inline String zmm_str_ctos(const char* cstr) {
     String str;
     str.len = strlen(cstr);
-    str.ptr = malloc(str.len + 1);
-    memcpy(str.ptr, cstr, str.len + 1);
+    str.ptr = malloc(str.len);
+    memcpy(str.ptr, cstr, str.len);
     return str;
 }
 
@@ -51,9 +50,8 @@ static inline StringView zmm_str_stov(String str) {
 }
 
 static inline char* zmm_str_vtoc(StringView str) {
-    char* cstr = malloc(str.len + 1);
+    char* cstr = malloc(str.len);
     memcpy(cstr, str.ptr, str.len);
-    cstr[str.len] = '\0';
 
     return cstr;
 }
@@ -63,3 +61,5 @@ static inline bool zmm_str_eq(StringView a, StringView b) {
 
     return memcmp(a.ptr, b.ptr, a.len) == 0;
 }
+
+#define strv(cstr) (StringView){cstr, sizeof(cstr) - 1}
