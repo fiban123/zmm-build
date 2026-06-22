@@ -1,12 +1,10 @@
-build/.obj/src/builder.o: src/builder.c include/builder.h include/arena.h \
-  include/export.h include/num.h include/arr.h include/slice.h \
-  extern/stb/stb_ds.h extern/khash/khash.h include/cpu.h
+build/.obj/src/builder.o: src/builder.c include/builder.h \
+  include/export.h include/str.h include/num.h extern/khash/khash.h \
+  include/cpu.h include/vec.h
 include/builder.h:
-include/arena.h:
 include/export.h:
+include/str.h:
 include/num.h:
-include/arr.h:
-include/slice.h:
-extern/stb/stb_ds.h:
 extern/khash/khash.h:
 include/cpu.h:
+include/vec.h:

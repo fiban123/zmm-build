@@ -1,10 +1,7 @@
-build/.obj/src/dep.o: src/dep.c include/dep.h include/arr.h \
-  include/export.h include/slice.h include/num.h extern/stb/stb_ds.h \
-  include/path.h
+build/.obj/src/dep.o: src/dep.c include/dep.h include/export.h \
+  include/str.h include/num.h include/vec.h
 include/dep.h:
-include/arr.h:
 include/export.h:
-include/slice.h:
+include/str.h:
 include/num.h:
-extern/stb/stb_ds.h:
-include/path.h:
+include/vec.h:

@@ -41,8 +41,16 @@ API ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
     zmm_argv_print(argv, num_args);
     ExecResult res = {.status = {.code = 1, .type = TERM_ERROR}, .output = {0}};
 
+    char** argv_copy = malloc((num_args + 1) * sizeof(char*));
+    if (!argv_copy) {
+        return res;
+    }
+    memcpy(argv_copy, argv, num_args * sizeof(char*));
+    argv_copy[num_args] = NULL;
+
     int pipe_fds[2];
     if (pipe(pipe_fds) != 0) {
+        free(argv_copy);
         return res;
     }
 
@@ -53,6 +61,7 @@ API ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
     if (pid < 0) {
         close(pipe_fds[0]);
         close(pipe_fds[1]);
+        free(argv_copy);
         return res;
     }
 
@@ -64,11 +73,12 @@ API ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
         close(pipe_fds[1]);
 
         // execvp doesnt mutate strings, but isnt const
-        execvp(argv[0], argv);
+        execvp(argv_copy[0], argv_copy);
         _exit(1);
     }
 
     // Parent
+    free(argv_copy);
     close(pipe_fds[1]);
 
     usize cap = 4096;
@@ -116,14 +126,23 @@ API ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args) {
     zmm_argv_print(argv, num_args);
     ChildTerm status = {.code = 1, .type = TERM_ERROR};
 
+    char** argv_copy = malloc((num_args + 1) * sizeof(char*));
+    if (!argv_copy) return status;
+    memcpy(argv_copy, argv, num_args * sizeof(char*));
+    argv_copy[num_args] = NULL;
+
     pid_t pid = fork();
-    if (pid < 0) return status;
+    if (pid < 0) {
+        free(argv_copy);
+        return status;
+    }
 
     if (pid == 0) {
-        execvp(argv[0], argv);
+        execvp(argv_copy[0], argv_copy);
         _exit(1);
     }
 
+    free(argv_copy);
     int wait_status = 0;
     waitpid(pid, &wait_status, 0);
 

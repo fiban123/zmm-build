@@ -1,7 +1,8 @@
 {
     "build-script-srcs": [
-        "./build.c"
+        "build.c",
+        ".zmm"
     ],
-    "build-script-exe": "./build.out",
-    "build-script-compile-cmd": "clang -std=c99 build.c -o build.out -lzmm -ggdb3"
+    "build-script-exe": "build.out",
+    "build-script-compile-cmd": "tcc -std=c99 -I../include build.c -o build.out -lzmm"
 }

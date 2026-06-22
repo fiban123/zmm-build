@@ -37,6 +37,7 @@ static inline void ob_flush(CompileCommands* cc) {
 static inline void ob_write(CompileCommands* cc, const void* data, usize len) {
     const char* d = (const char*)data;
     usize old_len = vecsize(cc->buf);
+    vecreserve(cc->buf, old_len + len);
     vecsetsize(cc->buf, old_len + len);
     memcpy(cc->buf + old_len, d, len);
 }
@@ -302,6 +303,9 @@ API int zmm_cc_parse(CompileCommand** out, StringView path) {
             }
         }
         vecpush(*out, cmd);
+        ;
+        ;
+        ;
     }
 
     free(t);

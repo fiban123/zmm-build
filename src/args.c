@@ -66,7 +66,7 @@ API int zmm_argvb_append(ArgvBuilder* argvb, StringView arg) {
     memcpy(argvb->buf + argvb->buf_len, arg.ptr, arg.len);
     argvb->argv[argvb->argv_len++] = argvb->buf + argvb->buf_len;
     argvb->buf_len += arg.len;
-    argvb->buf[argvb->buf_len++] = '\n';
+    argvb->buf[argvb->buf_len++] = '\0';
 
     return 0;
 }
@@ -122,7 +122,7 @@ API int zmm_argvb_pappend(ArgvBuilder* argvb, StringView arg) {
 API int zmm_argvb_pfinish(ArgvBuilder* argvb) {
     if (ensure_buf(argvb, 1)) return 1;
 
-    argvb->buf[argvb->buf_len++] = '\n';
+    argvb->buf[argvb->buf_len++] = '\0';
 
     return 0;
 }

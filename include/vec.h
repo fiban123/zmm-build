@@ -29,8 +29,12 @@ typedef union {
         usize size;
         usize cap;
     } md;
-    max_align_t align;
+    long long alignment_long;
+    double alignment_double;
+    void* alignment_ptr;
 } VecHeader;
+
+#define arrlen(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 #define vec(T) T*
 

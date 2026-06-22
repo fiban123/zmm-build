@@ -50,8 +50,11 @@ static inline StringView zmm_str_stov(String str) {
 }
 
 static inline char* zmm_str_vtoc(StringView str) {
-    char* cstr = malloc(str.len);
-    memcpy(cstr, str.ptr, str.len);
+    char* cstr = malloc(str.len + 1);
+    if (cstr) {
+        memcpy(cstr, str.ptr, str.len);
+        cstr[str.len] = '\0';
+    }
 
     return cstr;
 }
