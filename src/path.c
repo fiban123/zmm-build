@@ -143,68 +143,98 @@ API bool zmm_p_is_hidden(StringView path) {
     return false;
 }
 
-// Helper to check if a slice ends with a specific character
-static inline bool slice_ends_with_char(StringView s, char c) {
-    if (s.len == 0) return false;
-    return s.ptr[s.len - 1] == c;
-}
 
-// Helper to check if a slice starts with a specific character
-static inline bool slice_starts_with_char(StringView s, char c) {
-    if (s.len == 0) return false;
-    return s.ptr[0] == c;
-}
 
 API String zmm_p_join_arr(const StringView* parts) {
-    // 1. Calculate total length
+    // Pre-process: count parts, trim them, and decide which need a trailing '/'.
+    //
+    // Rules:
+    //   - A part that is just "/" (standalone slash) is not emitted; instead it
+    //     signals that the *previous* real part should be treated as a directory.
+    //   - A part whose trimmed content ends in '/' is a directory (we strip the
+    //     trailing slashes from it but remember to emit one separator).
+    //   - Otherwise, the part is a filename — no separator after it.
+    //   - Double slashes never appear.
+
+    // 1. Count raw parts so we can stack-allocate metadata.
+    usize n_raw = 0;
+    for (usize i = 0; parts[i].ptr != NULL; i++) n_raw++;
+
+    if (n_raw == 0) return (String){NULL, 0};
+
+    // Trim each part once, stripping leading "./" and trailing '/'.
+    // We store the cleaned view and a flag: "needs separator after".
+    StringView* trimmed = (StringView*)malloc(n_raw * sizeof(StringView));
+    bool* add_sep       = (bool*)malloc(n_raw * sizeof(bool));
+    if (!trimmed || !add_sep) { free(trimmed); free(add_sep); return (String){NULL, 0}; }
+
+    for (usize i = 0; i < n_raw; i++) {
+        StringView t = zmm_p_trim_dot_slash(parts[i]);
+        // Remember if the original trimmed part ended in '/' (directory marker).
+        bool was_dir = (t.len > 0 && t.ptr[t.len - 1] == '/');
+        // Strip all trailing slashes from the view.
+        while (t.len > 0 && t.ptr[t.len - 1] == '/') t.len--;
+        trimmed[i] = t;
+        add_sep[i] = was_dir; // may be upgraded later by a standalone "/" part
+    }
+
+    // 2. Resolve standalone "/" parts: they mark the previous real part as a
+    //    directory, then become empty so they won't be emitted.
+    for (usize i = 0; i < n_raw; i++) {
+        // A standalone "/" part has been fully stripped to len == 0,
+        // but the original (after dot-slash trimming) was purely slashes.
+        StringView orig = zmm_p_trim_dot_slash(parts[i]);
+        bool is_standalone_slash = (orig.len > 0 && trimmed[i].len == 0);
+        if (!is_standalone_slash) continue;
+
+        // Mark the nearest preceding non-empty part as a directory.
+        for (usize j = i; j > 0; j--) {
+            if (trimmed[j - 1].len > 0) {
+                add_sep[j - 1] = true;
+                break;
+            }
+        }
+        // This part contributes nothing.
+    }
+
+    // 3. Calculate total length (single O(n) pass).
     usize total_len = 0;
-    u32 last_non_empty_idx = U32_MAX;
-
-    for (usize i = 0; parts[i].ptr != NULL; i++) {
-        // Trim leading "./" right away as a pure view
-        StringView part = zmm_p_trim_dot_slash(parts[i]);
-        if (part.len == 0) continue;
-
-        if (last_non_empty_idx != U32_MAX) {
-            StringView prev = zmm_p_trim_dot_slash(parts[last_non_empty_idx]);
-            // Only add separator if previous doesn't end in slash
-            // and current doesn't start with a dot
-            if (!slice_ends_with_char(prev, '/') &&
-                !slice_starts_with_char(part, '.')) {
-                total_len += 1;
-            }
+    usize last_real = SIZE_MAX;
+    for (usize i = 0; i < n_raw; i++) {
+        if (trimmed[i].len == 0) continue;
+        if (last_real != SIZE_MAX && add_sep[last_real]) {
+            total_len += 1; // separator between parts
         }
-        total_len += part.len;
-        last_non_empty_idx = (u32)i;
+        total_len += trimmed[i].len;
+        last_real = i;
+    }
+    // Trailing slash: if the last real part is a directory, include it.
+    if (last_real != SIZE_MAX && add_sep[last_real]) {
+        total_len += 1;
     }
 
-    // 2. Always allocate on the heap
-    char* buffer = malloc(total_len);
-    if (!buffer) return (String){NULL, 0};
+    // 4. Allocate and fill.
+    char* buffer = (char*)malloc(total_len);
+    if (!buffer) { free(trimmed); free(add_sep); return (String){NULL, 0}; }
 
-    // 3. Fill buffer
     usize offset = 0;
-    last_non_empty_idx = U32_MAX;
-
-    for (usize i = 0; parts[i].ptr != NULL; i++) {
-        // Trim again for the copy phase
-        StringView part = zmm_p_trim_dot_slash(parts[i]);
-        if (part.len == 0) continue;
-
-        if (last_non_empty_idx != U32_MAX) {
-            StringView prev = zmm_p_trim_dot_slash(parts[last_non_empty_idx]);
-            if (!slice_ends_with_char(prev, '/') &&
-                !slice_starts_with_char(part, '.')) {
-                buffer[offset] = '/';
-                offset += 1;
-            }
+    last_real = SIZE_MAX;
+    for (usize i = 0; i < n_raw; i++) {
+        if (trimmed[i].len == 0) continue;
+        if (last_real != SIZE_MAX && add_sep[last_real]) {
+            buffer[offset++] = '/';
         }
-
-        memcpy(buffer + offset, part.ptr, part.len);
-        offset += part.len;
-        last_non_empty_idx = (u32)i;
+        memcpy(buffer + offset, trimmed[i].ptr, trimmed[i].len);
+        offset += trimmed[i].len;
+        last_real = i;
+    }
+    // Emit trailing slash if the last part is a directory.
+    if (last_real != SIZE_MAX && add_sep[last_real]) {
+        buffer[offset++] = '/';
     }
 
+    free(trimmed);
+    free(add_sep);
     return (String){.ptr = buffer, .len = total_len};
 }
 

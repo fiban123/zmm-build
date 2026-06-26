@@ -24,6 +24,10 @@
 #include "str.h"
 #include "vec.h"
 
+// When enabled, all zmm_fs_delete_* functions will print
+// "pretending to delete ..." and return 0 without touching the filesystem.
+API void zmm_fs_set_dry_delete(bool enable);
+
 typedef enum : u8 { FD_SHALLOW, FD_RECURSIVE } FindDepth;
 
 typedef enum : u8 { FK_FILE, FK_DIRECTORY } FindKind;

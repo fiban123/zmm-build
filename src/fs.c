@@ -33,6 +33,10 @@
 #include "print.h"
 #include "vec.h"
 
+static bool fs_dry_delete = false;
+
+API void zmm_fs_set_dry_delete(bool enable) { fs_dry_delete = enable; }
+
 static char* path_join(const char* dir, const char* file) {
     usize dlen = strlen(dir);
     usize flen = strlen(file);
@@ -208,6 +212,11 @@ API bool zmm_fs_file_exists(StringView path) {
 }
 
 API int zmm_fs_delete_file(StringView path) {
+    if (fs_dry_delete) {
+        zmm_lprintf("Pretending to delete file %s\n", path);
+        zmm_lemit();
+        return 0;
+    }
     zmm_lprintf("Deleting file %s\n", path);
     zmm_lemit();
 
@@ -224,6 +233,11 @@ API int zmm_fs_delete_file(StringView path) {
 }
 
 API int zmm_fs_delete_dir(StringView path) {
+    if (fs_dry_delete) {
+        zmm_lprintf("Pretending to delete directory %s\n", path);
+        zmm_lemit();
+        return 0;
+    }
     zmm_lprintf("Deleting directory %s\n", path);
     zmm_lemit();
 
@@ -262,6 +276,11 @@ static i32 delete_tree_cstr(const char* path) {
 }
 
 API int zmm_fs_delete_tree(StringView path) {
+    if (fs_dry_delete) {
+        zmm_lprintf("Pretending to delete tree %s\n", path);
+        zmm_lemit();
+        return 0;
+    }
     zmm_lprintf("Deleting tree %s\n", path);
     zmm_lemit();
 

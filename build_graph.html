@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>zmm Build Graph</title>
+<!-- Load fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Load Cytoscape and Dagre -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0b0b14;
+  color: #e0e0ea;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+#hdr {
+  background: #111122;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  z-index: 10;
+}
+#hdr h1 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.5px;
+}
+#hdr h1 span { color: #3b82f6; }
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+#stats {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: #8a8a9e;
+}
+#stats .stat-item { display: flex; align-items: center; gap: 6px; }
+#stats .v {
+  color: #ffffff;
+  font-weight: 600;
+  background: rgba(255,255,255,0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.search-container {
+  position: relative;
+  width: 240px;
+}
+#search-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 6px 12px 6px 32px;
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+#search-input:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+.search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+  pointer-events: none;
+  width: 14px;
+  height: 14px;
+}
+.btn {
+  background: rgba(255, 255, 255, 0.06);
+  color: #d1d1e0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+#workspace {
+  flex: 1;
+  position: relative;
+  display: flex;
+  overflow: hidden;
+}
+#graph {
+  flex: 1;
+  height: 100%;
+  z-index: 1;
+}
+#sidebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 380px;
+  height: 100%;
+  background: rgba(15, 15, 27, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 5;
+  transform: translateX(100%);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -8px 0 32px rgba(0,0,0,0.4);
+}
+#sidebar.open { transform: translateX(0); }
+.sidebar-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.sidebar-title-container { flex: 1; min-width: 0; }
+.sidebar-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  word-break: break-all;
+  line-height: 1.4;
+  font-family: 'JetBrains Mono', monospace;
+}
+.sidebar-close {
+  background: none;
+  border: none;
+  color: #64748b;
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+.sidebar-close:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.sidebar-content { flex: 1; overflow-y: auto; padding: 24px; }
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.meta-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.meta-label {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.meta-val { font-size: 13px; font-weight: 600; }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-target { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+.badge-phony { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+.badge-source { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+.badge-dirty { background: rgba(249, 115, 22, 0.15); color: #fdba74; border: 1px solid rgba(249, 115, 22, 0.3); }
+.badge-clean { background: rgba(34, 197, 94, 0.1); color: #86efac; border: 1px solid rgba(34, 197, 94, 0.2); }
+.section-title {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.list-box {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255,255,255,0.04);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 20px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.list-item {
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  word-break: break-all;
+  cursor: pointer;
+  color: #94a3b8;
+  transition: color 0.2s;
+}
+.list-item:last-child { border-bottom: none; }
+.list-item:hover { color: #3b82f6; }
+.empty-msg { font-size: 12px; color: #475569; font-style: italic; padding: 4px 0; }
+.copy-btn {
+  margin-top: 8px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: #94a3b8;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s;
+}
+.copy-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+#legend {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  background: rgba(15, 15, 27, 0.9);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 14px 18px;
+  z-index: 2;
+  font-size: 12px;
+  min-width: 200px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+#legend h3 {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.legend-sect { margin-bottom: 12px; }
+.legend-sect:last-child { margin-bottom: 0; }
+.legend-sect-title { font-size: 9px; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.legend-item { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; color: #94a3b8; }
+.legend-item:last-child { margin-bottom: 0; }
+.swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+.swatch-target { background: #1a3a5c; border-color: #0d2744; }
+.swatch-target-dirty { background: #3b82f6; border-color: #1d4ed8; }
+.swatch-phony { background: #3c0c5a; border-color: #2e0847; }
+.swatch-phony-dirty { background: #a855f7; border-color: #7e22ce; }
+.swatch-source { background: #0c3a1e; border-color: #062010; }
+.swatch-source-dirty { background: #22c55e; border-color: #15803d; }
+.edge-line { width: 24px; height: 0; flex-shrink: 0; }
+.edge-src { border-top: 2px solid #78909c; }
+.edge-dep { border-top: 2px dashed #f97316; }
+#zoom-controls {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 2;
+}
+.zoom-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(15, 15, 27, 0.9);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  transition: all 0.2s;
+}
+.zoom-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.1); border-color: rgba(255,255,255,0.15); }
+</style>
+</head>
+<body>
+<div id="hdr">
+  <h1><span>zmm</span> build graph</h1>
+  <div id="toolbar">
+    <div id="stats"></div>
+    <div class="search-container">
+      <svg class="search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+      </svg>
+      <input type="text" id="search-input" placeholder="Search nodes...">
+    </div>
+    <button id="tog" class="btn">Layout: Hierarchical</button>
+  </div>
+</div>
+
+<div id="workspace">
+  <div id="graph"></div>
+  
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title-container">
+        <div id="side-title" class="sidebar-title">Node Name</div>
+        <button id="copy-btn" class="copy-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          Copy Path
+        </button>
+      </div>
+      <button class="sidebar-close" onclick="hideNodeDetails()">&times;</button>
+    </div>
+    <div class="sidebar-content">
+      <div class="meta-grid">
+        <div class="meta-card">
+          <div class="meta-label">Type</div>
+          <div id="side-type" class="meta-val">-</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-label">Status</div>
+          <div id="side-status" class="meta-val">-</div>
+        </div>
+      </div>
+      <div class="meta-grid" style="margin-top:-12px">
+        <div class="meta-card" style="grid-column: span 2">
+          <div class="meta-label">In Subgraph</div>
+          <div id="side-subgraph" class="meta-val">-</div>
+        </div>
+      </div>
+      
+      <div class="section-title">Sources</div>
+      <div id="side-sources" class="list-box"></div>
+      
+      <div class="section-title">Dependencies</div>
+      <div id="side-deps" class="list-box"></div>
+      
+      <div class="section-title">Dependents (Waited on by)</div>
+      <div id="side-dependents" class="list-box"></div>
+    </div>
+  </div>
+  
+  <!-- Legend -->
+  <div id="legend">
+    <h3>Legend</h3>
+    <div class="legend-sect">
+      <div class="legend-sect-title">Clean / Dirty Nodes</div>
+      <div class="legend-item">
+        <div class="swatch swatch-target"></div> Target (Clean)
+      </div>
+      <div class="legend-item">
+        <div class="swatch swatch-target-dirty"></div> Target (Dirty)
+      </div>
+      <div class="legend-item">
+        <div class="swatch swatch-phony"></div> Phony (Clean)
+      </div>
+      <div class="legend-item">
+        <div class="swatch swatch-phony-dirty"></div> Phony (Dirty)
+      </div>
+      <div class="legend-item">
+        <div class="swatch swatch-source"></div> Source (Clean)
+      </div>
+      <div class="legend-item">
+        <div class="swatch swatch-source-dirty"></div> Source (Dirty)
+      </div>
+    </div>
+    <div class="legend-sect">
+      <div class="legend-sect-title">Edges</div>
+      <div class="legend-item">
+        <div class="edge-line edge-src"></div> Source compilation
+      </div>
+      <div class="legend-item">
+        <div class="edge-line edge-dep"></div> Build dependency
+      </div>
+    </div>
+  </div>
+  
+  <!-- Zoom Controls -->
+  <div id="zoom-controls">
+    <button id="zoom-in" class="zoom-btn" title="Zoom In">+</button>
+    <button id="zoom-out" class="zoom-btn" title="Zoom Out">&minus;</button>
+    <button id="zoom-fit" class="zoom-btn" title="Fit Graph">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M15 3h6v6M9 21H3v-6M21 9v12h-12M3 15V3h12"></path>
+      </svg>
+    </button>
+  </div>
+</div>
+
+<script>
+var N=[
+{id:0,label:"build/main.o",type:"Target",dirty:true,always_dirty:false,subgraph:true,sources:["src/main.c"],deps:["include/builder.h","include/str.h"]},
+{id:1,label:"src/main.c",type:"Source",dirty:true,always_dirty:false,subgraph:true,sources:[],deps:[]},
+{id:2,label:"include/builder.h",type:"Source",dirty:false,always_dirty:false,subgraph:true,sources:[],deps:[]},
+{id:3,label:"include/str.h",type:"Source",dirty:false,always_dirty:false,subgraph:true,sources:[],deps:[]},
+{id:4,label:"build/utils.o",type:"Target",dirty:true,always_dirty:false,subgraph:true,sources:["src/utils.c"],deps:["include/str.h"]},
+{id:5,label:"src/utils.c",type:"Source",dirty:true,always_dirty:false,subgraph:true,sources:[],deps:[]},
+{id:6,label:"all",type:"Phony",dirty:true,always_dirty:false,subgraph:true,sources:[],deps:["build/main.o","build/utils.o"]}
+];
+var E=[
+{from:1,to:0,src:true},
+{from:2,to:0,src:false},
+{from:3,to:0,src:false},
+{from:5,to:4,src:true},
+{from:3,to:4,src:false},
+{from:0,to:6,src:false},
+{from:4,to:6,src:false}
+];
+
+// Map raw N and E to Cytoscape elements
+var cyElements = [];
+N.forEach(function(n) {
+  cyElements.push({
+    data: {
+      id: String(n.id),
+      label: n.label,
+      type: n.type,
+      dirty: n.dirty,
+      alwaysDirty: n.always_dirty,
+      subgraph: n.subgraph,
+      sources: n.sources,
+      deps: n.deps
+    }
+  });
+});
+E.forEach(function(e, idx) {
+  cyElements.push({
+    data: {
+      id: 'e' + idx,
+      source: String(e.from),
+      target: String(e.to),
+      isSource: e.src
+    }
+  });
+});
+
+// Populate Stats
+var totalNodes = N.length;
+var targetsCount = N.filter(function(n) { return n.type === 'Target'; }).length;
+var phonyCount = N.filter(function(n) { return n.type === 'Phony'; }).length;
+var dirtyCount = N.filter(function(n) { return n.dirty; }).length;
+
+document.getElementById('stats').innerHTML =
+  '<div class="stat-item">Nodes <span class="v">' + totalNodes + '</span></div>' +
+  '<div class="stat-item">Targets <span class="v">' + targetsCount + '</span></div>' +
+  '<div class="stat-item">Phony <span class="v">' + phonyCount + '</span></div>' +
+  '<div class="stat-item">Dirty <span class="v">' + dirtyCount + '</span></div>';
+
+// Initialize Cytoscape
+var cy = cytoscape({
+  container: document.getElementById('graph'),
+  elements: cyElements,
+  boxSelectionEnabled: false,
+  autounselectify: true,
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'label': 'data(label)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'font-family': "'Inter', system-ui, sans-serif",
+        'font-size': '11px',
+        'color': '#fff',
+        'background-color': '#1e293b',
+        'border-width': '2px',
+        'border-color': '#475569',
+        'padding': '10px',
+        'width': 'label',
+        'height': 'label',
+        'shape': 'roundrectangle',
+        'transition-property': 'background-color, border-color, opacity, color',
+        'transition-duration': '0.2s'
+      }
+    },
+    {
+      selector: 'node[type="Target"][?dirty]',
+      style: {
+        'background-color': '#3b82f6',
+        'border-color': '#1d4ed8',
+        'color': '#ffffff'
+      }
+    },
+    {
+      selector: 'node[type="Target"][!dirty]',
+      style: {
+        'background-color': '#1a3a5c',
+        'border-color': '#0d2744',
+        'color': '#90caf9'
+      }
+    },
+    {
+      selector: 'node[type="Phony"][?dirty]',
+      style: {
+        'shape': 'diamond',
+        'background-color': '#a855f7',
+        'border-color': '#7e22ce',
+        'color': '#ffffff',
+        'padding': '14px'
+      }
+    },
+    {
+      selector: 'node[type="Phony"][!dirty]',
+      style: {
+        'shape': 'diamond',
+        'background-color': '#3c0c5a',
+        'border-color': '#2e0847',
+        'color': '#c084fc',
+        'padding': '14px'
+      }
+    },
+    {
+      selector: 'node[type="Source"][?dirty]',
+      style: {
+        'shape': 'ellipse',
+        'background-color': '#22c55e',
+        'border-color': '#15803d',
+        'color': '#ffffff'
+      }
+    },
+    {
+      selector: 'node[type="Source"][!dirty]',
+      style: {
+        'background-color': '#0c3a1e',
+        'border-color': '#062010',
+        'color': '#4ade80'
+      }
+    },
+    {
+      selector: 'edge',
+      style: {
+        'width': 1.5,
+        'line-color': '#f97316',
+        'target-arrow-color': '#f97316',
+        'target-arrow-shape': 'triangle',
+        'arrow-scale': 0.8,
+        'curve-style': 'bezier',
+        'line-style': 'dashed',
+        'opacity': 0.5,
+        'transition-property': 'line-color, target-arrow-color, width, opacity',
+        'transition-duration': '0.2s'
+      }
+    },
+    {
+      selector: 'edge[?isSource]',
+      style: {
+        'width': 2.0,
+        'line-color': '#78909c',
+        'target-arrow-color': '#78909c',
+        'line-style': 'solid',
+        'opacity': 0.7
+      }
+    },
+    {
+      selector: 'node.highlighted',
+      style: {
+        'border-color': '#fff',
+        'border-width': '3px',
+        'opacity': 1.0,
+        'z-index': 9999
+      }
+    },
+    {
+      selector: 'node.dimmed',
+      style: {
+        'opacity': 0.15
+      }
+    },
+    {
+      selector: 'edge.highlighted',
+      style: {
+        'width': 3.5,
+        'line-color': '#3b82f6',
+        'target-arrow-color': '#3b82f6',
+        'opacity': 1.0,
+        'z-index': 9998
+      }
+    },
+    {
+      selector: 'edge.dimmed',
+      style: {
+        'opacity': 0.05
+      }
+    },
+    {
+      selector: 'node.search-match',
+      style: {
+        'border-color': '#eab308',
+        'border-width': '3px',
+        'opacity': 1.0,
+        'z-index': 9999
+      }
+    },
+    {
+      selector: 'node.search-dim',
+      style: {
+        'opacity': 0.15
+      }
+    },
+    {
+      selector: 'edge.search-dim',
+      style: {
+        'opacity': 0.05
+      }
+    }
+  ]
+});
+
+// Layout management
+var isHierarchical = true;
+var currentLayout = null;
+
+function runLayout() {
+  if (currentLayout) currentLayout.stop();
+  
+  var layoutOpts = {};
+  if (isHierarchical) {
+    layoutOpts = {
+      name: 'dagre',
+      rankDir: 'BT',
+      nodeSep: 60,
+      edgeSep: 20,
+      rankSep: 100,
+      animate: true,
+      animationDuration: 400
+    };
+  } else {
+    layoutOpts = {
+      name: 'cose',
+      animate: true,
+      animationDuration: 600,
+      refresh: 20,
+      fit: true,
+      padding: 30,
+      randomize: true,
+      componentSpacing: 100,
+      nodeRepulsion: function(node) { return 400000; },
+      nodeOverlap: 20,
+      idealEdgeLength: function(edge) { return 100; },
+      edgeElasticity: function(edge) { return 100; },
+      nestingFactor: 5,
+      gravity: 80,
+      numIter: 1000,
+      initialTemp: 200,
+      coolingFactor: 0.95,
+      minTemp: 1.0
+    };
+  }
+  currentLayout = cy.layout(layoutOpts);
+  currentLayout.run();
+}
+
+runLayout();
+
+// Toggle Layout Button
+document.getElementById('tog').onclick = function() {
+  isHierarchical = !isHierarchical;
+  this.textContent = isHierarchical ? 'Layout: Hierarchical' : 'Layout: Force-Directed';
+  runLayout();
+};
+
+// Hover highlight logic
+cy.on('mouseover', 'node', function(e) {
+  if (document.getElementById('search-input').value.trim() !== '') return;
+  
+  var node = e.target;
+  var neighborhood = node.neighborhood();
+  
+  node.addClass('highlighted');
+  
+  neighborhood.forEach(function(ele) {
+    if (ele.isEdge()) {
+      ele.addClass('highlighted');
+      ele.connectedNodes().addClass('highlighted');
+    }
+  });
+  
+  cy.elements().forEach(function(ele) {
+    if (!ele.hasClass('highlighted')) {
+      ele.addClass('dimmed');
+    }
+  });
+});
+
+cy.on('mouseout', 'node', function(e) {
+  if (document.getElementById('search-input').value.trim() !== '') return;
+  cy.elements().removeClass('highlighted').removeClass('dimmed');
+});
+
+// Node click/selection logic
+var selectedNode = null;
+cy.on('tap', 'node', function(e) {
+  showNodeDetails(e.target);
+});
+
+cy.on('tap', function(e) {
+  if (e.target === cy) {
+    hideNodeDetails();
+  }
+});
+
+function showNodeDetails(node) {
+  var data = node.data();
+  selectedNode = node;
+  
+  document.getElementById('side-title').textContent = data.label;
+  
+  var typeHtml = '';
+  if (data.type === 'Target') typeHtml = '<span class="badge badge-target">Target</span>';
+  else if (data.type === 'Phony') typeHtml = '<span class="badge badge-phony">Phony</span>';
+  else typeHtml = '<span class="badge badge-source">Source</span>';
+  
+  var statusHtml = data.dirty 
+    ? '<span class="badge badge-dirty">Dirty</span>' 
+    : '<span class="badge badge-clean">Clean</span>';
+  
+  if (data.alwaysDirty) {
+    statusHtml += ' <span class="badge badge-dirty" style="margin-left:4px">Always Dirty</span>';
+  }
+  
+  document.getElementById('side-type').innerHTML = typeHtml;
+  document.getElementById('side-status').innerHTML = statusHtml;
+  document.getElementById('side-subgraph').textContent = data.subgraph ? 'Yes' : 'No';
+  
+  // Sources List
+  var sourcesBox = document.getElementById('side-sources');
+  sourcesBox.innerHTML = '';
+  if (data.sources && data.sources.length > 0) {
+    data.sources.forEach(function(src) {
+      var item = document.createElement('div');
+      item.className = 'list-item';
+      item.textContent = src;
+      item.onclick = function() { findAndZoomToNode(src); };
+      sourcesBox.appendChild(item);
+    });
+  } else {
+    sourcesBox.innerHTML = '<div class="empty-msg">No source files</div>';
+  }
+  
+  // Deps List
+  var depsBox = document.getElementById('side-deps');
+  depsBox.innerHTML = '';
+  if (data.deps && data.deps.length > 0) {
+    data.deps.forEach(function(dep) {
+      var item = document.createElement('div');
+      item.className = 'list-item';
+      item.textContent = dep;
+      item.onclick = function() { findAndZoomToNode(dep); };
+      depsBox.appendChild(item);
+    });
+  } else {
+    depsBox.innerHTML = '<div class="empty-msg">No dependency files</div>';
+  }
+  
+  // Dependents / Dependencies
+  var dependents = node.outgoers().nodes();
+  var dependentsBox = document.getElementById('side-dependents');
+  dependentsBox.innerHTML = '';
+  if (dependents.length > 0) {
+    dependents.forEach(function(depNode) {
+      var dData = depNode.data();
+      var item = document.createElement('div');
+      item.className = 'list-item';
+      item.textContent = dData.label;
+      item.onclick = function() { findAndZoomToNode(dData.label); };
+      dependentsBox.appendChild(item);
+    });
+  } else {
+    dependentsBox.innerHTML = '<div class="empty-msg">No dependent targets</div>';
+  }
+  
+  document.getElementById('sidebar').classList.add('open');
+}
+
+function hideNodeDetails() {
+  selectedNode = null;
+  document.getElementById('sidebar').classList.remove('open');
+}
+
+function findAndZoomToNode(label) {
+  var found = cy.nodes().filter(function(ele) {
+    return ele.data('label') === label;
+  });
+  
+  if (found.length > 0) {
+    cy.animate({
+      center: { eles: found },
+      zoom: 1.4
+    }, {
+      duration: 350,
+      easing: 'ease-out-cubic'
+    });
+    
+    var originalColor = found.style('border-color');
+    found.animate({
+      style: {
+        'border-color': '#ffffff',
+        'border-width': '4px'
+      }
+    }, {
+      duration: 200,
+      complete: function() {
+        found.animate({
+          style: {
+            'border-color': originalColor,
+            'border-width': '2px'
+          }
+        }, { duration: 300 });
+      }
+    });
+    
+    showNodeDetails(found);
+  }
+}
+
+// Search filter/highlight logic
+document.getElementById('search-input').addEventListener('input', function(e) {
+  var query = e.target.value.trim().toLowerCase();
+  if (query === '') {
+    cy.elements().removeClass('search-match').removeClass('search-dim');
+    return;
+  }
+  
+  cy.elements().forEach(function(ele) {
+    if (ele.isNode()) {
+      var label = ele.data('label').toLowerCase();
+      if (label.indexOf(query) !== -1) {
+        ele.addClass('search-match');
+        ele.removeClass('search-dim');
+      } else {
+        ele.removeClass('search-match');
+        ele.addClass('search-dim');
+      }
+    } else {
+      ele.addClass('search-dim');
+    }
+  });
+});
+
+document.getElementById('search-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    var query = this.value.trim().toLowerCase();
+    if (query === '') return;
+    
+    var bestMatch = null;
+    var bestScore = -1;
+    
+    cy.nodes().forEach(function(node) {
+      var label = node.data('label').toLowerCase();
+      var score = -1;
+      if (label === query) score = 3;
+      else if (label.startsWith(query)) score = 2;
+      else if (label.indexOf(query) !== -1) score = 1;
+      
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = node;
+      }
+    });
+    
+    if (bestMatch) {
+      findAndZoomToNode(bestMatch.data('label'));
+      this.blur();
+    }
+  }
+});
+
+// Copy Button Handler
+document.getElementById('copy-btn').onclick = function() {
+  var titleText = document.getElementById('side-title').textContent;
+  navigator.clipboard.writeText(titleText).then(function() {
+    var copyBtn = document.getElementById('copy-btn');
+    var origHtml = copyBtn.innerHTML;
+    copyBtn.innerHTML = '✓ Copied!';
+    setTimeout(function() {
+      copyBtn.innerHTML = origHtml;
+    }, 1500);
+  });
+};
+
+// Zoom controls
+document.getElementById('zoom-in').onclick = function() {
+  cy.zoom({
+    level: cy.zoom() * 1.2,
+    position: { x: cy.width() / 2, y: cy.height() / 2 }
+  });
+};
+document.getElementById('zoom-out').onclick = function() {
+  cy.zoom({
+    level: cy.zoom() / 1.2,
+    position: { x: cy.width() / 2, y: cy.height() / 2 }
+  });
+};
+document.getElementById('zoom-fit').onclick = function() {
+  cy.animate({
+    fit: { padding: 30 }
+  }, {
+    duration: 350
+  });
+};
+</script>
+</body>
+</html>

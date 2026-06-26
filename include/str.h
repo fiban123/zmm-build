@@ -65,4 +65,9 @@ static inline bool zmm_str_eq(StringView a, StringView b) {
     return memcmp(a.ptr, b.ptr, a.len) == 0;
 }
 
+#ifndef ZMM_STR_NO_SHORT_NAMES
+
 #define strv(cstr) (StringView){cstr, sizeof(cstr) - 1}
+#define stov(str) zmm_str_stov(str)
+
+#endif

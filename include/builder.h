@@ -51,6 +51,10 @@ API bool zmm_bg_is_dirty(BuildGraph* g, StringView target);
 
 API int zmm_bg_exec(BuildGraph* g);
 
+// Writes a JSON build graph representation (.bg) to output_path. Call after
+// zmm_bg_prepare() for meaningful dirty status.
+API int zmm_bg_visualize(BuildGraph* g, const char* output_path);
+
 API int zmm_bg_add(BuildGraph* g, const StringView* sources, usize num_sources,
                    StringView output, const StringView* deps, usize num_deps,
                    BuilderFn builder, bool always_dirty);
@@ -60,9 +64,9 @@ API int zmm_bg_add_phony(BuildGraph* g, const StringView* sources,
                          const StringView* deps, usize num_deps,
                          BuilderFn builder, bool always_dirty);
 
-API void zmm_tg_init(TargetBuilder* tg, BuildGraph* g, StringView output);
+API void zmm_tg_init(TargetBuilder* tg, BuildGraph* g, StringView output,
+                     BuilderFn builder);
 
-API void zmm_tg_set_builder(TargetBuilder* tg, BuilderFn builder);
 API void zmm_tg_set_phony(TargetBuilder* tg);
 API void zmm_tg_set_always_dirty(TargetBuilder* tg);
 

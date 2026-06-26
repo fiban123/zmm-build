@@ -20,6 +20,7 @@
 #include <khash/khash.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -254,8 +255,7 @@ API int zmm_bg_add(BuildGraph* g, const StringView* sources, usize num_sources,
                    StringView output, const StringView* deps, usize num_deps,
                    BuilderFn builder, bool always_dirty) {
     TargetBuilder tg;
-    zmm_tg_init(&tg, g, output);
-    zmm_tg_set_builder(&tg, builder);
+    zmm_tg_init(&tg, g, output, builder);
     if (always_dirty) zmm_tg_set_always_dirty(&tg);
     if (zmm_tg_add_src(&tg, sources, num_sources)) return 1;
     if (num_deps > 0 && zmm_tg_add_dep(&tg, deps, num_deps) != 0) return 1;
@@ -278,15 +278,12 @@ API int zmm_bg_add_phony(BuildGraph* g, const StringView* sources,
 
 // --- TargetBuilder API ---
 
-API void zmm_tg_init(TargetBuilder* tg, BuildGraph* g, StringView output) {
-    if (!tg || !g) return;
+API void zmm_tg_init(TargetBuilder* tg, BuildGraph* g, StringView output,
+                     BuilderFn builder) {
     NodeId id = get_or_put_node(g, output);
     g->nodes[id].flags |= NODE_FLAG_IS_TARGET;
     tg->g = g;
     tg->id = id;
-}
-
-API void zmm_tg_set_builder(TargetBuilder* tg, BuilderFn builder) {
     tg->g->nodes[tg->id].builder = builder;
 }
 
@@ -593,4 +590,100 @@ API int zmm_bg_exec(BuildGraph* g) {
     queue_free(&queue);
 
     return atomic_load(&has_error) ? 1 : 0;
+}
+
+// --- Visualization ---
+
+static void viz_json_str(FILE* f, StringView sv) {
+    fputc('"', f);
+    if (sv.ptr) {
+        for (usize i = 0; i < sv.len; ++i) {
+            unsigned char c = (unsigned char)sv.ptr[i];
+            if (c == '"')
+                fputs("\\\"", f);
+            else if (c == '\\')
+                fputs("\\\\", f);
+            else if (c == '\n')
+                fputs("\\n", f);
+            else if (c == '\r')
+                fputs("\\r", f);
+            else if (c == '\t')
+                fputs("\\t", f);
+            else if (c < 0x20)
+                fprintf(f, "\\u%04x", c);
+            else
+                fputc(c, f);
+        }
+    }
+    fputc('"', f);
+}
+
+static bool viz_is_source_of(Node* n, StringView dep_out) {
+    for (usize i = 0; i < vecsize(n->sources); ++i) {
+        if (zmm_str_eq(n->sources[i], dep_out)) return true;
+    }
+    return false;
+}
+
+API int zmm_bg_visualize(BuildGraph* g, const char* output_path) {
+    if (!g || !output_path) return 1;
+    FILE* f = fopen(output_path, "w");
+    if (!f) return 1;
+
+    usize nn = vecsize(g->nodes);
+
+    fputs("{\n  \"nodes\": [\n", f);
+    for (usize i = 0; i < nn; ++i) {
+        Node* n = &g->nodes[i];
+        bool is_tgt = (n->flags & NODE_FLAG_IS_TARGET) != 0;
+        bool is_phony = (n->flags & NODE_FLAG_PHONY) != 0;
+        bool dirty = n->is_dirty;
+        bool ad = (n->flags & NODE_FLAG_ALWAYS_DIRTY) != 0;
+
+        const char* tp;
+        if (is_phony)
+            tp = "Phony";
+        else if (is_tgt)
+            tp = "Target";
+        else
+            tp = "Source";
+
+        fprintf(f, "    {\n      \"id\": %zu,\n      \"label\": ", i);
+        viz_json_str(f, n->output);
+        fprintf(f, ",\n      \"type\": \"%s\",\n      \"dirty\": %s,\n      \"always_dirty\": %s,\n      \"subgraph\": %s", tp,
+                dirty ? "true" : "false", ad ? "true" : "false",
+                n->is_in_subgraph ? "true" : "false");
+
+        fputs(",\n      \"sources\": [", f);
+        for (usize j = 0; j < vecsize(n->sources); ++j) {
+            if (j) fputc(',', f);
+            viz_json_str(f, n->sources[j]);
+        }
+
+        fputs("],\n      \"deps\": [", f);
+        for (usize j = 0; j < vecsize(n->deps); ++j) {
+            if (j) fputc(',', f);
+            viz_json_str(f, n->deps[j]);
+        }
+
+        fprintf(f, "]\n    }%s\n", i + 1 < nn ? "," : "");
+    }
+    fputs("  ],\n  \"edges\": [\n", f);
+
+    bool first = true;
+    for (usize i = 0; i < nn; ++i) {
+        Node* n = &g->nodes[i];
+        for (usize j = 0; j < vecsize(n->waits_on); ++j) {
+            NodeId did = n->waits_on[j];
+            bool src = viz_is_source_of(n, g->nodes[did].output);
+            if (!first) fputs(",\n", f);
+            first = false;
+            fprintf(f, "    {\n      \"from\": %zu,\n      \"to\": %zu,\n      \"src\": %s\n    }", (usize)did, i,
+                    src ? "true" : "false");
+        }
+    }
+    fputs("\n  ]\n}\n", f);
+
+    fclose(f);
+    return 0;
 }

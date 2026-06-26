@@ -1,0 +1,91 @@
+{
+  "nodes": [
+    {
+      "id": 0,
+      "label": "build/main.o",
+      "type": "Target",
+      "dirty": true,
+      "always_dirty": false,
+      "subgraph": true,
+      "sources": ["src/main.c"],
+      "deps": ["include/helper.h"]
+    },
+    {
+      "id": 1,
+      "label": "src/main.c",
+      "type": "Source",
+      "dirty": true,
+      "always_dirty": false,
+      "subgraph": true,
+      "sources": [],
+      "deps": []
+    },
+    {
+      "id": 2,
+      "label": "include/helper.h",
+      "type": "Source",
+      "dirty": true,
+      "always_dirty": false,
+      "subgraph": true,
+      "sources": [],
+      "deps": []
+    },
+    {
+      "id": 3,
+      "label": "build/helper.o",
+      "type": "Target",
+      "dirty": true,
+      "always_dirty": false,
+      "subgraph": true,
+      "sources": ["src/helper.c"],
+      "deps": []
+    },
+    {
+      "id": 4,
+      "label": "src/helper.c",
+      "type": "Source",
+      "dirty": true,
+      "always_dirty": false,
+      "subgraph": true,
+      "sources": [],
+      "deps": []
+    },
+    {
+      "id": 5,
+      "label": "build/app.out",
+      "type": "Target",
+      "dirty": true,
+      "always_dirty": false,
+      "subgraph": true,
+      "sources": ["build/main.o","build/helper.o"],
+      "deps": []
+    }
+  ],
+  "edges": [
+    {
+      "from": 1,
+      "to": 0,
+      "src": true
+    },
+    {
+      "from": 2,
+      "to": 0,
+      "src": false
+    },
+    {
+      "from": 4,
+      "to": 3,
+      "src": true
+    },
+    {
+      "from": 0,
+      "to": 5,
+      "src": true
+    },
+    {
+      "from": 3,
+      "to": 5,
+      "src": true
+    }
+  ]
+}
