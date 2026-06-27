@@ -17,6 +17,9 @@
 
 #include "args.h"
 
+#include <inttypes.h>
+#include <stdio.h>
+
 #include "print.h"
 #include "str.h"
 
@@ -93,7 +96,7 @@ API int zmm_argvb_appendc_n(ArgvBuilder* argvb, const char* const* args,
     return 0;
 }
 
-API int zmm_argvb_append_argv(ArgvBuilder* argvb, const char* const* argv,
+API int zmm_argvb_append_argv(ArgvBuilder* argvb, char* const* argv,
                               usize argv_len) {
     for (usize i = 0; i < argv_len; i++) {
         zmm_argvb_append(argvb, (StringView){argv[i], strlen(argv[i])});
@@ -101,7 +104,6 @@ API int zmm_argvb_append_argv(ArgvBuilder* argvb, const char* const* argv,
 
     return 0;
 }
-
 API int zmm_argvb_pstart(ArgvBuilder* argvb) {
     if (ensure_argv(argvb, 1)) return 1;
 
@@ -117,6 +119,34 @@ API int zmm_argvb_pappend(ArgvBuilder* argvb, StringView arg) {
     argvb->buf_len += arg.len;
 
     return 0;
+}
+
+API int zmm_argvb_pappend_i64(ArgvBuilder* argvb, i64 val) {
+    char buf[64];
+    int len = snprintf(buf, sizeof(buf), "%" PRId64, val);
+    if (len < 0 || (size_t)len >= sizeof(buf)) return 1;
+    return zmm_argvb_pappend(argvb, (StringView){buf, (usize)len});
+}
+
+API int zmm_argvb_pappend_u64(ArgvBuilder* argvb, u64 val) {
+    char buf[64];
+    int len = snprintf(buf, sizeof(buf), "%" PRIu64, val);
+    if (len < 0 || (size_t)len >= sizeof(buf)) return 1;
+    return zmm_argvb_pappend(argvb, (StringView){buf, (usize)len});
+}
+
+API int zmm_argvb_pappend_float(ArgvBuilder* argvb, float val) {
+    char buf[64];
+    int len = snprintf(buf, sizeof(buf), "%.9g", (double)val);
+    if (len < 0 || (size_t)len >= sizeof(buf)) return 1;
+    return zmm_argvb_pappend(argvb, (StringView){buf, (usize)len});
+}
+
+API int zmm_argvb_pappend_double(ArgvBuilder* argvb, double val) {
+    char buf[64];
+    int len = snprintf(buf, sizeof(buf), "%.17g", val);
+    if (len < 0 || (size_t)len >= sizeof(buf)) return 1;
+    return zmm_argvb_pappend(argvb, (StringView){buf, (usize)len});
 }
 
 API int zmm_argvb_pfinish(ArgvBuilder* argvb) {

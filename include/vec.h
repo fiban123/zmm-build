@@ -34,7 +34,7 @@ typedef union {
     void* alignment_ptr;
 } VecHeader;
 
-#define arrlen(arr) (sizeof(arr) / sizeof((arr)[0]))
+#define arrsize(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 #define vec(T) T*
 

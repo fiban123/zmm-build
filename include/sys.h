@@ -52,3 +52,7 @@ API ExecResult zmm_sys_exec_flat(const char* arg_buf, usize num_args);
 API ChildTerm zmm_sys_exec_print_flat(const char* arg_buf, usize num_args);
 
 API ChildTerm zmm_sys_exec_redirect_flat(const char* arg_buf, usize num_args);
+
+API void zmm_sys_set_verbose(bool verbose);
+API bool zmm_sys_get_verbose(void);
+

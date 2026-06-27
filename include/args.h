@@ -42,12 +42,20 @@ API int zmm_argvb_append_n(ArgvBuilder* argvb, const StringView* args, usize n);
 API int zmm_argvb_appendc_n(ArgvBuilder* argvb, const char* const* args,
                             usize n);
 
-API int zmm_argvb_append_argv(ArgvBuilder* argvb, const char* const* argv,
+API int zmm_argvb_append_argv(ArgvBuilder* argvb, char* const* argv,
                               usize argv_len);
 
 API int zmm_argvb_pstart(ArgvBuilder* argvb);
 
 API int zmm_argvb_pappend(ArgvBuilder* argvb, StringView arg);
+
+API int zmm_argvb_pappend_i64(ArgvBuilder* argvb, i64 val);
+
+API int zmm_argvb_pappend_u64(ArgvBuilder* argvb, u64 val);
+
+API int zmm_argvb_pappend_float(ArgvBuilder* argvb, float val);
+
+API int zmm_argvb_pappend_double(ArgvBuilder* argvb, double val);
 
 API int zmm_argvb_pfinish(ArgvBuilder* argvb);
 

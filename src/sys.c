@@ -32,13 +32,17 @@
 #include "args.h"
 #include "print.h"
 
+static _Thread_local bool sys_verbose = true;
+
 // ----------------------------------------------------------------------------
 // POSIX Implementation
 // ----------------------------------------------------------------------------
 #ifndef _WIN32
 
 API ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
-    zmm_argv_print(argv, num_args);
+    if (sys_verbose) {
+        zmm_argv_print(argv, num_args);
+    }
     ExecResult res = {.status = {.code = 1, .type = TERM_ERROR}, .output = {0}};
 
     char** argv_copy = malloc((num_args + 1) * sizeof(char*));
@@ -123,7 +127,9 @@ API ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
 }
 
 API ChildTerm zmm_sys_exec_redirect(char* const* argv, usize num_args) {
-    zmm_argv_print(argv, num_args);
+    if (sys_verbose) {
+        zmm_argv_print(argv, num_args);
+    }
     ChildTerm status = {.code = 1, .type = TERM_ERROR};
 
     char** argv_copy = malloc((num_args + 1) * sizeof(char*));
@@ -202,7 +208,9 @@ static char* build_win32_cmdline(char* const* argv, usize num_args) {
 }
 
 API ExecResult zmm_sys_exec(char* const* argv, usize num_args) {
-    zmm_argv_print(argv, num_args);
+    if (sys_verbose) {
+        zmm_argv_print(argv, num_args);
+    }
     ExecResult res = {.status = {.code = 1, .type = TERM_ERROR}, .output = {0}};
 
     SECURITY_ATTRIBUTES sa = {.nLength = sizeof(SECURITY_ATTRIBUTES),
@@ -394,4 +402,12 @@ API ChildTerm zmm_sys_exec_redirect_flat(const char* arg_buf, usize num_args) {
 
     free(argv);
     return status;
+}
+
+API void zmm_sys_set_verbose(bool verbose) {
+    sys_verbose = verbose;
+}
+
+API bool zmm_sys_get_verbose(void) {
+    return sys_verbose;
 }
